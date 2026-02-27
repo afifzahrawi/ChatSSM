@@ -1,0 +1,312 @@
+{
+  "_readme": [
+    "ChatSSM Knowledge Base Configuration",
+    "──────────────────────────────────────────────────────────────────────",
+    "HOW TO ADD A NEW SOURCE:",
+    "  1. Add an entry to the 'sources' array below.",
+    "  2. Set the correct 'doc_type' (see reference below).",
+    "  3. Run:  python preprocess.py --key <your_key>",
+    "  4. Restart the app (or click Reload Config in the sidebar).",
+    "",
+    "FIELD REFERENCE:",
+    "  key        - unique identifier, lowercase + underscores only",
+    "  name       - human-readable display name shown in the UI",
+    "  category   - Legislations | Practice Notes | Practice Directives |",
+    "               Guidelines | Circular | FAQ | Forms",
+    "  type       - pdf  OR  csv",
+    "  doc_type   - which PARSER to use:",
+    "               act     = Malaysian Acts (PART / Section structure)",
+    "               general = Practice Notes, Guidelines, Circulars",
+    "                         (numbered paragraphs, headings, free prose)",
+    "               faq     = FAQ documents (Q: / A: pairs or numbered Q&A)",
+    "  url        - (pdf) public download URL",
+    "  local_path - (pdf or csv) absolute path on your machine",
+    "  enabled    - true = skip this source entirely"
+  ],
+
+  "sources": [
+
+    {
+      "_note": "════════════════════════════════ LEGISLATIONS ════════════════════════════════"
+    },
+
+    {
+      "key":        "ca2016",
+      "name":       "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Companies%20Act%202016_Akta%20777_BI%20(1.8.2022).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "roba1956",
+      "name":       "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Registration of Businesses Act 1956"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/ROBA%201956_Act%20197_as%20at%201%20June%202017.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "llpa2012",
+      "name":       "Limited Liability Partnership Act 2012 (Act 743) - 1 Mar 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Limited Liability Partnership Act 2012"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/LLPA%202012_Act%20743_as%20at%201%20March%202017.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "_note": "══════════════════════════════ PRACTICE NOTES ════════════════════════════════"
+    },
+
+    {
+      "_note": "Use doc_type=general for Practice Notes. They use numbered paragraph",
+      "_note2": "structure (1., 1.1, 1.2) rather than the PART/Section structure of Acts."
+    },
+
+    {
+      "key":        "ca_pn1_2017",
+      "name":       "Companies Act 2016: Practice Note No. 1/2017: Clarification On The Utilization Of Credit Standing In The Share Premium Accounts And The Capital Redemption Reserves Under Section 618",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/pn1-2017_r1.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn3_2018",
+      "name":       "Companies Act 2016 : Practice Note No. 3/2018: Clarification on Application for Extension of Time under the Companies Act 2016",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%205/pn_ss_609_2592_3404_eot.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn4_2018",
+      "name":       "Companies Act 2016 : Practice Note No. 4/2018: Procedures on Resignation of Secretary under Section 237 of the Companies Act 2016",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PN4-2018_(BI).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn5_2019",
+      "name":       "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PN%205%202019%20-%20queried%20documents%20%20applications%20(18072019)%20Final%20Final%20uploaded%20version.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn6_2019",
+      "name":       "Companies Act 2016 : Practice Note No. 6/2019 (Revised): Procedures for Rectification of Documents Lodged and Registered with the Companies Commission of Malaysia",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Practice%20Note%206%20of%202019%20(Revised%20on%2024%20January%202022%20)r1.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn6_2024",
+      "name":       "Companies Act 2016: Practice Note No. 6/2024: Notification of Approval as an Approved Liquidator",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PN%206-2024%20(7.5.24).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn7_2024",
+      "name":       "Companies Act 2016 : Practice Note No. 7/2024: Publication or Advertisement on the Official Website of SSM In Lieu of Any Information Required to be Published or Advertised under the Companies Act 2016",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Practice%20Note%20Advert%20on%20SSM%20Website_310125.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn8_2024",
+      "name":       "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/_PN8_2024%20PN11-2011revoked_311224.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pn9_2024",
+      "name":       "Companies Act 2016 : Practice Note No. 9/2024: Clarification on Procedures Relating to Notification of Appointment and Removal of Directors under Section 58 of the Companies Act 2016",
+      "category":   "Practice Notes",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/_PN9_2024%20PN16-2013revoked_311224.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "_note": "══════════════════════════════ PRACTICE DIRECTIVES ══════════════════════════"
+    },
+
+    {
+      "key":        "ca_pd7_2021",
+      "name":       "Practice Directive 7/2021 - Lodgement of Annexure on Beneficial Ownership Information of Annual Return Lodged under Sections 68 and 576 of the Companies Act 2016 (Revised)",
+      "category":   "Practice Directives",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Practice%20Directive%207%202021%20(Revised)%2028112024.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pd8_2021",
+      "name":       "Practice Directive 8/2021 - Extension of Time for Circulation of Financial Statements and Reports, Holding of Annual General Meeting and Lodgement of Financial Statements for Companies Affected by the Implementation of Movement Control Order",
+      "category":   "Practice Directives",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PD%208.2021%20CA%202016%20(31.5.2021)(RDSD)_Final.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pd9_2024",
+      "name":       "Practice Directive 9/2024 - Lodgement of Beneficial Ownership Information under the Companies Act 2016 Through e-BOS (Revised)",
+      "category":   "Practice Directives",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Practice%20Directive%209%202024%20(Revised-%20Extended%20time%20frame)%20r1%20(fair)%20v2.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_pd10_2024",
+      "name":       "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "category":   "Practice Directives",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PD10-2024-Qualifying-Criteria-for-Audit-Exemption-for-Certain-Categories-of-Private-Companies.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "_note": "═══════════════════════════════ GUIDELINES ══════════════════════════════════"
+    },
+
+    {
+      "_note": "Guidelines use doc_type=general (same numbered paragraph structure as Practice Notes)."
+    },
+
+    {
+      "key":        "guideline_audit_committee",
+      "name":       "Guideline on Audit Committee - [Year]",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "url":        null,
+      "local_path": "C:\\path\\to\\guideline_audit_committee.pdf",
+      "enabled":    false
+    },
+
+    {
+      "_note": "═══════════════════════════════ CIRCULARS ═══════════════════════════════════"
+    },
+
+    {
+      "key":        "circular_1_2024",
+      "name":       "SSM Circular No. 1/2024 - [Add Title Here]",
+      "category":   "Circular",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "url":        null,
+      "local_path": "C:\\path\\to\\circular_1_2024.pdf",
+      "enabled":    false
+    },
+
+    {
+      "_note": "════════════════════════════════ FAQ ════════════════════════════════════════"
+    },
+
+    {
+      "_note": "FAQ documents use doc_type=faq. The parser detects Q/A pairs and keeps",
+      "_note2": "each question + answer together as one chunk for accurate retrieval."
+    },
+
+    {
+      "key":        "faq_company_incorporation",
+      "name":       "FAQ - Company Incorporation",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "url":        null,
+      "local_path": "C:\\path\\to\\faq_incorporation.pdf",
+      "enabled":    false
+    },
+
+    {
+      "_note": "══════════════════════════════════ FORMS ═══════════════════════════════════"
+    },
+
+    {
+      "_note": "Forms are instruction guides, not Q/A or Act structures. Use doc_type=general."
+    },
+
+    {
+      "key":        "form_49",
+      "name":       "Form 49 - Return Giving Particulars in Register of Directors",
+      "category":   "Forms",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "url":        null,
+      "local_path": "C:\\path\\to\\form_49.pdf",
+      "enabled":    false
+    }
+
+  ]
+}

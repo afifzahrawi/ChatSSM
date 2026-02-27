@@ -1,0 +1,13 @@
+# ChatSSM - Requirements
+# Python 3.11 required (3.12 works too; avoid 3.14)
+# Install: pip install -r requirements.txt
+
+# Core app
+streamlit==1.32.0
+requests==2.31.0
+pandas==2.2.1
+numpy==1.26.4
+
+# PDF extraction
+pdfplumber==0.11.0
+pypdf==4.2.0
