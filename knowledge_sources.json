@@ -393,14 +393,15 @@
     },
 
     {
-      "key":        "circular_1_2024",
-      "name":       "SSM Circular No. 1/2024 - [Add Title Here]",
+      "key":        "ca_circular1_2024",
+      "name":       "Circular 1/2020 - Guidance Notes on the Registration of Firms of Liquidators and Notification on the Approval as an Approved Liquidator (Amended on 1 April 2024)",
       "category":   "Circular",
       "type":       "pdf",
       "doc_type":   "general",
-      "url":        null,
-      "local_path": "C:\\path\\to\\circular_1_2024.pdf",
-      "enabled":    false
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Circular%20No.%201-2020%20(Amended%20on%201%20April%202024).pdf",
+      "local_path": null,
+      "enabled":    true
     },
 
     {
@@ -669,10 +670,22 @@
       "name":       "FAQs ON GUIDELINES RELATING TO THE OBLIGATIONS OF COMPANY SECRETARY AS A REPORTING INSTITUTION UNDER THE AMLA",
       "category":   "FAQ",
       "type":       "pdf",
-      "doc_type":   "faq",
-      "url":        null,
-      "local_path": "C:\\path\\to\\faq_incorporation.pdf",
-      "enabled":    false
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/FAQs%20-%20FINAL%20(19.1.2024).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_act_amendment_2024",
+      "name":       "FAQs ON THE COMPANIES (AMENDMENT) ACT 2024 [ACT A1701]",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/FAQ%20CA%20(Amendment)%202024.pdf",
+      "local_path": null,
+      "enabled":    true
     },
 
     {
