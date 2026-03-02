@@ -244,14 +244,147 @@
     },
 
     {
-      "key":        "guideline_audit_committee",
-      "name":       "Guideline on Audit Committee - [Year]",
+      "key":        "ca_gl_1",
+      "name":       "Guidelines for Corporate Rescue Mechanism under Division 8 Part III of the Companies Act 2016 (Revised)",
       "category":   "Guidelines",
       "type":       "pdf",
       "doc_type":   "general",
-      "url":        null,
-      "local_path": "C:\\path\\to\\guideline_audit_committee.pdf",
-      "enabled":    false
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20for%20CVA%20JM%20(Revised).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_2",
+      "name":       "Guidelines for the Adjudication of Proof of Debts under Section 369B of the Companies Act 2016 and other related matters",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20for%20POD%20and%20related%20matters.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_3",
+      "name":       "Guidelines for the Reporting Framework for Beneficial Ownership of Companies",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guideline%20BO%20(Revised)%202025%20fair.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_4",
+      "name":       "Guidelines Pursuant to Subsection 264(4A) of the Companies Act 2016 for a Firm of Auditors",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/01_Guidelines%20Pursuant%20to%20Section%20264(4A)%20of%20the%20CA%202016.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_5",
+      "name":       "Guidelines Relating to the Obligations of Company Secretary as a Reporting Institution Under the Anti-Money Laundering, Anti-Terrorism Financing and Proceeds of Unlawful Activities Act 2001 (AMLA)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20Relating%20to%20the%20Obligations%20of%20Company%20Secretary%20as%20a%20Reporting%20Institution%20under%20AMLA%202001.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_6",
+      "name":       "Guidelines Relating to Practising Certificate for Secretaries under Section 241 of the Companies Act 2016",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/GUIDELINE%20FOR%20REGISTRATION%20TO%20ACT%20AS%20SECRETARY%20UNDER%20S%20241%20AS2016_22.10.2025.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_7",
+      "name":       "Guidelines For Striking Off Section 549(d)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20Striking%20Off%20section%20549(d)_190419.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_8",
+      "name":       "Guidelines For Striking Off Section 549(a)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20for%20Striking%20Off%20_Section%20549_190419.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_9",
+      "name":       "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Guidelines%20Assets%20Management_556%20%26%20558_Revised_02.03.2020.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_10",
+      "name":       "Guidelines on CLBG",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/bm/Pages/Legal_Framework/document/03_Revised%20CLBG%20Guidelines_15%20July%202025.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_10.1",
+      "name":       "Checklist for CLBG (1-8)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Checklist%201-8.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gl_11",
+      "name":       "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "category":   "Guidelines",
+      "type":       "pdf",
+      "doc_type":   "general",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/GARIS%20PANDUAN%20NAMA%20SYARIKAT%20(BI)%20_REFERRAL%20AUTHORITIES_170924.pdf",
+      "local_path": null,
+      "enabled":    true
     },
 
     {
@@ -279,8 +412,260 @@
     },
 
     {
-      "key":        "faq_company_incorporation",
-      "name":       "FAQ - Company Incorporation",
+      "key":        "ca_faq_1_partA",
+      "name":       "FAQ - ENFORCEMENT DATE OF THE COMPANIES ACT 2016 AND TRANSITIONAL ISSUES",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20A.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partB",
+      "name":       "FAQ - CONSTITUTION (MEMORANDUM & ARTICLES OF ASSOCIATION)",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20B.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partC",
+      "name":       "FAQ - INCORPORATION",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/FAQS-ON-COMPANIES-ACT-2016-AND-TRANSITIONAL-ISSUES/part_c.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partD",
+      "name":       "FAQ - DOCUMENTS TO BE KEPT",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20D.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partE",
+      "name":       "FAQ - NOTIFICATION OF PAR​TICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20E.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partF",
+      "name":       "FAQ - DIRECTOR",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20F%20s223%20311224.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partG",
+      "name":       "FAQ - EXECUTION OF DOCUMENTS",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/FAQS-ON-COMPANIES-ACT-2016-AND-TRANSITIONAL-ISSUES/part_g.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partH",
+      "name":       "FAQ - ANNUAL RETURN",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/FAQS-ON-COMPANIES-ACT-2016-AND-TRANSITIONAL-ISSUES/part_h.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partI",
+      "name":       "FAQ - RETURN OF ALLOTMENT OF SHARES (ROA) AND REGISTER OF MEMBERS (ROM)",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20I%20s50s51%20311224.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partJ",
+      "name":       "FAQ - AUDITOR",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20J.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partK",
+      "name":       "FAQ - REGISTRATION OF SECRETARY",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Part%20K.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partL",
+      "name":       "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20L.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partM",
+      "name":       "FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20M.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partN",
+      "name":       "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20N.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partO",
+      "name":       "FAQ - MEETINGS AND DECISION MAKING",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20O%20r1%20updated%20070819.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partP",
+      "name":       "FAQ - RECTIFICATION OF DOCUMENTS",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/FAQS-ON-COMPANIES-ACT-2016-AND-TRANSITIONAL-ISSUES/FAQ%20PART%20P.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partQ",
+      "name":       "FAQ - AUDIT EXEMPTION",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PART%20Q%20(6.11.2025).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_partR",
+      "name":       "FAQ - PRACTISING CERTIFICATE",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/FAQ%20-%20PINDAAN%20KE%20ATAS%20GARIS%20PANDUAN%20PC%202025_FINAL.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_1_others",
+      "name":       "FAQ - OTHERS",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/OTHERSr1.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_act",
+      "name":       "FAQs ON THE COMPANIES ACT 2016 (ACT 777) [BACKGROUND TO THE REVIEW PROCESS AND NEW MALAYSIAN COMPANIES ACT]",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "faq",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/FAQS-ON-COMPANIES-ACT-2016-AND-TRANSITIONAL-ISSUES/companies_act_2016_-_policies.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_amendment_bill_2019",
+      "name":       "FAQs ON THE COMPANIES (AMENDMENT) BILL 2019",
+      "category":   "FAQ",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Soalan%20lazim%20RUU%20Syarikat%20(Pindaan)%20030120_amend%20Bil.%2010_s%20386.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_faq_amla",
+      "name":       "FAQs ON GUIDELINES RELATING TO THE OBLIGATIONS OF COMPANY SECRETARY AS A REPORTING INSTITUTION UNDER THE AMLA",
       "category":   "FAQ",
       "type":       "pdf",
       "doc_type":   "faq",
