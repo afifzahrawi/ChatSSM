@@ -234,7 +234,7 @@ VALID_CATEGORIES: List[str] = [
 ]
 
 # doc_type folder names
-VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "regulation"]
+VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "regulation", "others"]
 
 
 def _filename_to_key(filename: str) -> str:
