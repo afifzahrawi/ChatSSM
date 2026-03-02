@@ -1795,6 +1795,92 @@ def scan_sources() -> None:
     print(f"\n  {len(folder)} folder source(s), {len(json_ov)} JSON entry/entries")
     print(f"  Run without --scan to process all.\n")
 
+def parse_with_ai(
+    text: str,
+    source_key: str,
+    source_name: str,
+) -> List[Dict]:
+    """
+    Fallback parser: uses the local Ollama LLM to chunk any document
+    regardless of format. Slower (5-15s/page) but handles any layout.
+    Output is the same CSV schema as all other parsers.
+    """
+    import json, requests
+
+    CHUNK_PROMPT = """\
+You are preprocessing a Malaysian legal document for a retrieval system.
+Split the following text into self-contained chunks, each covering one
+concept, regulation, section, or Q&A pair.
+
+Rules:
+- Keep related sub-items (a)(b)(c) together with their parent clause
+- Keep a table together with the text that introduces it
+- Do NOT split a sentence across chunks
+- Each chunk must make sense on its own without surrounding context
+- For Q&A documents: one chunk = one question + its full answer
+
+Return ONLY a JSON array, no preamble, no markdown fences:
+[
+  {
+    "part": "PART I – PRELIMINARY",
+    "section": "Section 2",
+    "section_title": "Interpretation",
+    "content": "In this Act, unless the context otherwise requires..."
+  }
+]
+
+TEXT:
+{text}
+"""
+    rows = []
+    # Split into ~2000-char pages to stay within context window
+    page_size = 2000
+    pages = [text[i:i+page_size] for i in range(0, len(text), page_size)]
+
+    for page_num, page_text in enumerate(pages):
+        try:
+            r = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model":  "deepseek-r1:8b",
+                    "prompt": CHUNK_PROMPT.format(text=page_text),
+                    "stream": False,
+                    "options": {"temperature": 0.0, "num_predict": 2000},
+                },
+                timeout=120,
+            )
+            raw = r.json().get("response", "").strip()
+            # Strip any <think> blocks before parsing JSON
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+            raw = re.sub(r"```json|```", "", raw).strip()
+            parsed = json.loads(raw)
+            for item in parsed:
+                content = item.get("content", "").strip()
+                if len(content) < 60:
+                    continue
+                rows.append({
+                    "source_key":    source_key,
+                    "source_name":   source_name,
+                    "part":          item.get("part", ""),
+                    "division":      "",
+                    "subdivision":   "",
+                    "section":       item.get("section", ""),
+                    "section_title": item.get("section_title", ""),
+                    "content":       content,
+                })
+        except Exception as exc:
+            logger.warning("AI chunking failed for page %d: %s", page_num, exc)
+            # Fallback: treat entire page as one chunk
+            if len(page_text.strip()) >= 60:
+                rows.append({
+                    "source_key": source_key, "source_name": source_name,
+                    "part": "", "division": "", "subdivision": "",
+                    "section": f"Page {page_num+1}", "section_title": "",
+                    "content": page_text.strip(),
+                })
+
+    logger.info("  AI parser: produced %d chunks from '%s'.", len(rows), source_name)
+    return rows
 
 def main() -> None:
     parser = argparse.ArgumentParser(
