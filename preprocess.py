@@ -548,8 +548,20 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
     try:
         pages: List[str] = []
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
+            for page in pdf.pages:
+                found_tables = page.find_tables()
+                table_bboxes = [t.bbox for t in found_tables]
+
+                if table_bboxes:
+                    def _outside(obj, bboxes=table_bboxes):
+                        x0, top = obj.get("x0", 0), obj.get("top", 0)
+                        for (tx0, ttop, tx1, tbottom) in bboxes:
+                            if tx0 <= x0 <= tx1 and ttop <= top <= tbottom:
+                                return False
+                        return True
+                    text = page.filter(_outside).extract_text()
+                else:
+                    text = page.extract_text()
                 if text:
                     pages.append(text)
 
@@ -558,16 +570,33 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                     rows = []
                     for row in table:
                         row_text = " | ".join(str(c).strip() if c else "" for c in row)
-                        if row_text.strip(" |"):
+                        if any(c and str(c).strip() for c in row):
                             rows.append(row_text)
                     if rows:
                         pages.append("[TABLE]\n" + "\n".join(rows) + "\n[/TABLE]")
 
+        merged_pages = []
+        for p in pages:
+            if (merged_pages
+                    and merged_pages[-1].startswith("[TABLE]")
+                    and p.startswith("[TABLE]")):
+                # Append rows from page N+1 into the existing block, before [/TABLE]
+                merged_pages[-1] = (
+                    merged_pages[-1][:-len("\n[/TABLE]")]
+                    if merged_pages[-1].endswith("\n[/TABLE]")
+                    else merged_pages[-1]
+                ) + "\n" + p[len("[TABLE]\n"):p.rfind("\n[/TABLE]")] + "\n[/TABLE]"
+            else:
+                merged_pages.append(p)
+        pages = merged_pages
+
         full = "\n\n".join(pages)
-        if len(full) > 500:
-            logger.info("  pdfplumber: extracted %d chars.", len(full))
+        table_blocks = [p for p in pages if p.startswith("[TABLE]")]
+        if len(full) > 500 or table_blocks:
+            logger.info("  pdfplumber: extracted %d chars (%d table blocks).", len(full), len(table_blocks))
             return full
         logger.warning("  pdfplumber returned very little text; trying pypdf.")
+
     except Exception as exc:
         logger.warning("  pdfplumber failed (%s); trying pypdf.", exc)
 
