@@ -698,7 +698,7 @@ def parse_legal_document(
                 content_lines.pop(j)
             break
 
-        content_str = " ".join(content_lines).strip()
+        content_str = "\n".join(content_lines).strip()
         if len(content_str) < MIN_CONTENT_CHARS:
             # Section too short to save — but preserve the marginal note
             if extracted_note:
