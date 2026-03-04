@@ -16,7 +16,7 @@
     "  type       - pdf  OR  csv",
     "  doc_type   - which PARSER to use:",
     "               act         = Malaysian Acts (PART / Section structure)",
-    "               regulation  = Malaysian Regulations (numbered paragraph structure)",
+    "               gazette  = Malaysian Regulations (numbered paragraph structure)",
     "               general     = Practice Notes, Guidelines, Circulars (numbered paragraphs, headings, free prose)",
     "               faq         = FAQ documents (Q: / A: pairs or numbered Q&A)",
     "               others      = For any other document types. Uses general parsing with AI cleanup.",
@@ -39,6 +39,354 @@
       "doc_type":   "act",
       "related_to_acts": ["Companies Act 2016"],
       "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Companies%20Act%202016_Akta%20777_BI%20(1.8.2022).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette1",
+      "name":       "Companies Regulations 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/company_regulation_pua_20170126_p_u_a_37_1.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette2",
+      "name":       "Appointment of Date of Coming into Operation (except section 241 and Division 8 Part III of the CA 2016)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/pub_20170126_p.u._b_50.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette4",
+      "name":       "Direction of the Minister under paragraph 26(1)(d) and section 564 (Gazette Notification for Application of Company Name)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/pemberitahuan_warta_nama_syarikat.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette5",
+      "name":       "Companies (Amendment) Regulations 2018",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/peraturan-peraturan_syarikat_pindaan_2018_pua15_2018.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette6",
+      "name":       "Appointment of Date of Coming into Operation (Division 8 Part III of the CA 2016)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/pub_20180228_p.u._b_106_2018.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette7",
+      "name":       "Companies (Corporate Rescue Mechanism) Rules 2018",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/pua_20180302_p.u.a64%20(1).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette8",
+      "name":       "Prescription of Recognized Professional Body under section 433(5) of the CA 2016",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/pub_20180313_PUB%20123.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette9",
+      "name":       "Appointment of Date of Coming into Operation (section 241 of the CA 2016)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/pub_20190314_PUB138_2019.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette10",
+      "name":       "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/pua_20190314_PUA76_2019.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette11",
+      "name":       "Companies (Amendment) Bill 2019 (tabled in Dewan Negara on 31 July 2019)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "others",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/D.R.17_2019%20-%20eng.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette12",
+      "name":       "Companies (Amendment) Act 2019",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Companies%20(Amendment)%20Act%202019.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette13",
+      "name":       "Appointment of Date of Coming into Operation - Companies (Amendment) Act 2019​ [Act A1605]",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/CA%20Amendment%20enforcemt%20dt_pub_20200113_PUB%2016.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette14",
+      "name":       "Companies (Company Auditor and Liquidator Fees) Regulations 2020",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Co%20Regs%20Fee%20Liquidator%20Auditor_pua_20200113_P.U.%20(A)%209.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette15",
+      "name":       "Direction of the Minister under paragraph 466(1)(a)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Direction%20of%20Minister%20under%20para%20466(1)(a).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette16",
+      "name":       "Companies (Exemption) (No. 2) Order 2020",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUA123_2020.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette17",
+      "name":       "Prescription of Amount of Indebtedness of Company under paragraph 466(1)(a) (GN No. 21841 of 2020)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/GN%2021841_KPDNHEP%2030.12.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette18",
+      "name":       "Prescription of Amount of Indebtedness of Company under paragraph 466(1)(a) (GN No. 4159 of 2021)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/GN%20No.%204159_Penetapan%20Amaun%20Keterhutangan%20Syarikat.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette19",
+      "name":       "Companies (Amendment) Regulations 2021",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUA%20339_Companies%20(Amendment)%20Regulations%202021.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette20",
+      "name":       "Companies (Amendment of Fourth Schedule) Order 2022",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Companies%20(Amendment%20of%20Fourth%20Schedule)%20Order_PUA%20231.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette21",
+      "name":       "Companies (Prescribed Interest for Islamic Securities Selling and Buying Negotiated Transaction) Regulations 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/pua_20171211_PU%20A%20381.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette22",
+      "name":       "Companies (Amendment) Act 2024 {Act A1701}",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/A1701%20BI.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette23",
+      "name":       "Appointment of Date of Coming into Operation - Companies (Amendment) Act 2024 [Act A1701]",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUB118_2024_Act%20A1701.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette24",
+      "name":       "Appointment of Date of Coming into Operation - Companies (Amendment) Act 2024 [Act A1701] (sections 4, 26 and 28 of Act A1701)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUB%20475_2024_Enforcement%20of%20ss%204%2026%2028%20Act%20A1701.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette25",
+      "name":       "Companies (Amendment) Regulations 2024",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUA%20356_2024_Fee%20eAdvert.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette26",
+      "name":       "Companies (Access to the Register and Information Relating to Beneficial Ownership) Regulations 2025",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUA%207%20(2025).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette27",
+      "name":       "Appointment of Date of Coming into Operation - Companies (Amendment) Act 2024 [Act A1701] (section 14 of Act A1701)",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUB%2053_2025_Penetapan%20Tarikh%20Permulaan%20Kuat%20Kuasa_s%2014%20Akta%20A1701.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette28",
+      "name":       "Companies (Amendment of Eighth Schedule) Order 2025",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/PUA%208_2025_Perintah%20Syarikat%20(Pindaan%20Jadual%20Kelapan)%202025.pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette29",
+      "name":       "Companies (Licence For Omission Of 'Berhad' Or 'Bhd.') Regulations 2025",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/01_PUA%20213(2025)_s%2045(3).pdf",
+      "local_path": null,
+      "enabled":    true
+    },
+
+    {
+      "key":        "ca_gazette30",
+      "name":       "Companies (Licence For Land Holding) Regulations 2025",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "gazette",
+      "related_to_acts": ["Companies Act 2016"],
+      "url":        "https://www.ssm.com.my/bm/Pages/Legal_Framework/document/02_PUA%20211%20(2025)_s%2045(4).pdf",
       "local_path": null,
       "enabled":    true
     },
@@ -511,7 +859,7 @@
 
     {
       "key":        "ca_faq_1_partE",
-      "name":       "FAQ - NOTIFICATION OF PAR​TICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
+      "name":       "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
       "category":   "FAQ",
       "type":       "pdf",
       "doc_type":   "faq",
