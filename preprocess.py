@@ -1048,6 +1048,8 @@ def parse_general_document(
             continue
         if _PN_HEADER_RE.match(line):       # "1 PN 3/2018 26 July 2018"
             continue
+        if _TABLE_TAG_RE.match(line):
+            continue
 
         # ── Major chunk boundary ──────────────────────────────────────────────
         if _is_major_boundary(line):
