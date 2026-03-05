@@ -1,0 +1,22 @@
+qa_id,timestamp,question,answer,sources_used,user_rating
+a54d509eba57,2026-03-02T16:13:46.891259,How to apply Striking Off?,"To apply for Striking Off under Section 549(a) of the Companies Act 2016:
+
+1.  **Eligibility:** The company must be a body corporate, not a holding company, not involved in legal proceedings, not making a return of capital, and not being wound up (unless specific conditions under Section 549(d) are met).
+2.  **Application Form:** The applicant (shareholder or liquidator, if applicable) must complete the **Declaration-Application to Strike Off Company** form.
+3.  **Submission:** The completed form must be submitted along with the required fee (RM100.00 for the application, RM500.00 for withdrawal, RM300.00 for objection).
+4.  **Requirements:** The application must be supported by proof that the Registrar's records are up-to-date, the company is not involved in legal proceedings, and the company has not made a return of capital.
+5.  **Withdrawal:** An applicant may withdraw the striking off application within 30 days from the date of notice/notification issued under Section 551(1) by writing to the Registrar indicating the reasons and paying RM500.00.
+6.  **Objection:** Any person may file an objection within 60 days from the date of the notice/notification issued under Section 551(1) by submitting the objection and supporting documents with a fee of RM300.00.
+7.  **Publication:** Upon publication of the Gazette pursuant to Section 551(3), the company's name is struck off.","Guidelines For Striking Off Section 549(a), Companies Act 2016 (Act 777) - 1 Aug 2022, Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar, Guidelines For Striking Off Section 549(d)",5
+08bb505079dc,2026-03-02T16:20:51.778588,how much to incorporate private company,"To incorporate a private company, the application fee is RM200. This fee is mentioned in the checklist for CLBG under Section 45 Companies Act 2016, point A.1.","Companies Act 2016 (Act 777) - 1 Aug 2022, FAQ - INCORPORATION, FAQs ON THE COMPANIES ACT 2016 (ACT 777) [BACKGROUND TO THE REVIEW PROCESS AND NEW MALAYSIAN COMPANIES ACT], Checklist for CLBG (1-8)",1
+7ab0d412f004,2026-03-04T12:25:43.733080,what is meant by dormant company?,"**Direct Answer**
+A company is dormant in a financial year if the company does not carry on business and there is no accounting transaction occurred. **(Practice Directive 10/2024, paragraph 11(a))**
+
+**Relevant Provisions**
+- Section 245(1), Companies Act 2016: ""Accounting transaction"" means a transaction, accounting or other records of which is required to be kept under section 245(1) of the Companies Act 2016, excluding a transaction arising from any obligations that the company is required to abide by any laws to pay and its related costs to comply. **(Practice Directive 10/2024, paragraph 11(b))**
+- Section 549(a), Companies Act 2016: The Registrar may strike a company off the register if the company is not carrying on business or is not in operation. **(Guidelines For Striking Off Section 549(a), paragraph 3)**
+
+**Practical Notes**
+- A company cannot state its nature of business as ""dormant"" in its Annual Return. **(Practice Directive 2/2017, paragraph 6)**
+- Dormant companies qualify for audit exemption if they have been dormant since incorporation or in the current and immediate past financial year. **(FAQ - AUDIT EXEMPTION, A)**
+- Dormancy is defined as the company not carrying on business or not in operation, which aligns with Section 549(a) of the Companies Act 2016. **(Guidelines For Striking Off Section 549(a), paragraph 4)**","Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia, FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING, FAQ - AUDIT EXEMPTION, Companies Act 2016 (Act 777) - 1 Aug 2022, Guidelines For Striking Off Section 549(a), Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business, Companies (Corporate Rescue Mechanism) Rules 2018",5

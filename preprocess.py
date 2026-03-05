@@ -745,6 +745,9 @@ def parse_legal_document(
         if _NOTE_RE.match(line):          # "NOTE-The Companies Act 1965…"
             i += 1
             continue
+        if _TABLE_TAG_RE.match(line):  
+            i += 1
+            continue
 
         # ── PART header ──────────────────────────────────────────────────────
         if _PART_RE.match(line):
@@ -1005,7 +1008,7 @@ def parse_general_document(
 
     def _flush() -> None:
         nonlocal current_lines
-        content = " ".join(current_lines).strip()
+        content = "\n".join(current_lines).strip()
         current_lines = []
         if len(content) < MIN_CONTENT_CHARS:
             return
@@ -1080,13 +1083,19 @@ def _split_at_sentences(text: str, max_chars: int) -> List[str]:
     """
     if len(text) <= max_chars:
         return [text]
+    
+    if "|" in text:
+        return [text] 
 
     chunks: List[str] = []
     while len(text) > max_chars:
         # Find the last sentence-ending punctuation before the limit
         split_at = -1
         for m in re.finditer(r"[.!?]\s+", text[:max_chars]):
-            split_at = m.end()
+            candidate = m.end()
+            before = text[:candidate]
+            if "\n" in before and before.rindex("\n") > before.rindex("|") if "|" in before else True:
+                split_at = candidate
         if split_at == -1:
             # No sentence boundary — split at last whitespace
             split_at = text[:max_chars].rfind(" ")
@@ -1205,7 +1214,7 @@ def parse_faq_document(
         nonlocal current_q, current_a_lines, mode
         if not current_q:
             return
-        answer = " ".join(current_a_lines).strip()
+        answer = "\n".join(current_a_lines).strip()
         if not answer:
             if len(current_q) >= MIN_CONTENT_CHARS:
                 rows.append({
@@ -1332,21 +1341,21 @@ def parse_faq_document(
     return rows
 
 
-# ─── Regulation / Subsidiary Legislation parser ───────────────────────────────
+# ─── Gazette / Subsidiary Legislation parser ───────────────────────────────
 #
-# Handles: Companies Regulations, LLP Regulations, Business Registration Regs,
+# Handles: Companies Gazette, LLP Gazette, Business Registration Gazette,
 # and any Malaysian subsidiary legislation (P.U.(A) gazette orders).
 #
 # Structure:
 #   TITLE (bilingual header)
-#   ARRANGEMENT OF REGULATIONS  (bilingual TOC — must be stripped)
+#   ARRANGEMENT OF GAZETTES  (bilingual TOC — must be stripped)
 #   Title-case heading           ← chunk boundary ("Citation and commencement")
-#   N. (1) Content...            ← regulation body (numbered paragraphs = CONTENT)
+#   N. (1) Content...            ← gazette body (numbered paragraphs = CONTENT)
 #   SCHEDULE                     ← fee table — one chunk per schedule
 #   [TABLE] rows [/TABLE]        ← pdfplumber table output
 #
 # Key differences from Acts:
-#   1. "Section" → "Regulation" numbering ("3." not "Section 3.")
+#   1. "Section" → "Gazette" numbering ("3." not "Section 3.")
 #   2. Chunk boundaries are Title Case headings, not PART/Section markers
 #   3. Document is BILINGUAL (Malay then English). We keep English only.
 #   4. Running header "P.U. (A) 37" appears on every page — must be filtered.
@@ -1389,7 +1398,7 @@ _ENGLISH_ANCHOR_RE = re.compile(
 )
 
 # Regulation number line: "3.  All documents..." or "8. (1) The fees..."
-_REG_BODY_RE = re.compile(r"^(\d+[A-Z]?)\.\s+(.+)")
+_GAZETTE_BODY_RE = re.compile(r"^(\d+[A-Z]?)\.\s+(.+)")
 
 # Schedule/Appendix heading
 _SCHEDULE_RE = re.compile(r"^(SCHEDULE|JADUAL|Appendix|Annex)\b", re.IGNORECASE)
@@ -1397,30 +1406,30 @@ _SCHEDULE_RE = re.compile(r"^(SCHEDULE|JADUAL|Appendix|Annex)\b", re.IGNORECASE)
 # Fee table row: contains RM amounts or numeric fee data
 _FEE_ROW_RE = re.compile(r"(\d{1,3}(,\d{3})*\.\d{2}|Tiada\b)", re.IGNORECASE)
 
-# Title-case regulation heading — max 90 chars to cover long Malaysian headings
+# Title-case gazette heading — max 90 chars to cover long Malaysian headings
 # e.g. "Lodgement of documents or application through electronic filing system" (70 chars)
-_REG_HEADING_RE = re.compile(r"^[A-Z][a-zA-Z].{2,88}$")
+_GAZETTE_HEADING_RE = re.compile(r"^[A-Z][a-zA-Z].{2,88}$")
 
 
-def _is_regulation_heading(line: str) -> bool:
+def _is_gazette_heading(line: str) -> bool:
     """
-    Return True if line is a regulation section heading — the Title Case
-    heading that precedes each numbered regulation body.
+    Return True if line is a gazette section heading — the Title Case
+    heading that precedes each numbered gazette body.
 
     Examples:
       "Citation and commencement"       → True
       "Lodgement of documents..."       → True  (short enough)
       "Fees"                            → True
-      "3.  All documents required..."   → False  (regulation body)
-      "(1) Upon receipt..."             → False  (sub-regulation)
+      "3.  All documents required..."   → False  (gazette body)
+      "(1) Upon receipt..."             → False  (sub-gazette body)
     """
     if not line or len(line) < 3:
         return False
     # Must start with a capital letter followed by lowercase
     if not re.match(r"^[A-Z][a-z]", line):
         return False
-    # Must not look like a regulation body line
-    if _REG_BODY_RE.match(line):
+    # Must not look like a gazette body line
+    if _GAZETTE_BODY_RE.match(line):
         return False
     # Must not end with sentence punctuation (headings don't)
     if line.endswith(".") and len(line) > 40:
@@ -1431,7 +1440,7 @@ def _is_regulation_heading(line: str) -> bool:
     # Reject long prose sentences
     if len(line) > 100:
         return False
-    if _REG_HEADING_RE.match(line):
+    if _GAZETTE_HEADING_RE.match(line):
         return True
     return False
 
@@ -1439,7 +1448,7 @@ def _is_regulation_heading(line: str) -> bool:
 def _is_malay_line(line: str) -> bool:
     """
     Return True if a line is predominantly Malay with no significant English content.
-    Used to strip the Malay half of bilingual regulation documents.
+    Used to strip the Malay half of bilingual gazette documents.
 
     Strategy: count Malay keyword hits vs English keyword hits.
     If Malay hits > English hits AND no strong English anchors → Malay line.
@@ -1456,20 +1465,20 @@ def _is_malay_line(line: str) -> bool:
     return True                         # mostly Malay → strip
 
 
-def parse_regulation_document(
+def parse_gazette_document(
     text: str,
     source_key: str,
     source_name: str,
 ) -> List[Dict]:
     """
     Parser for Malaysian subsidiary legislation:
-    Companies Regulations, LLP Regulations, Business Registration Regulations,
+    Companies Gazettes, LLP Gazettes, Business Registration Gazettes,
     gazette orders, and similar P.U.(A) documents.
 
     Chunking strategy
     -----------------
     Each Title Case heading (e.g. "Citation and commencement", "Fees") starts
-    a new chunk. All numbered regulation paragraphs under that heading are
+    a new chunk. All numbered gazette paragraphs under that heading are
     accumulated as content within that chunk.
 
     The fee SCHEDULE is treated as one dedicated chunk per schedule section,
@@ -1501,7 +1510,7 @@ def parse_regulation_document(
 
     def _flush() -> None:
         nonlocal current_lines
-        content = " ".join(l for l in current_lines if l).strip()
+        content = "\n".join(l for l in current_lines if l).strip()
         current_lines = []
         if len(content) < MIN_CONTENT_CHARS:
             return
@@ -1527,16 +1536,21 @@ def parse_regulation_document(
             })
 
     # "IN exercise of the powers..." marks start of English body
-    _ENGLISH_START = re.compile(r"^IN\s+exercise\s+of", re.IGNORECASE)
+    _ENGLISH_START = re.compile(r"^IN|In\s+exercise\s+of", re.IGNORECASE)
     # "PADA menjalankan..." marks start of Malay body
-    _MALAY_START   = re.compile(r"^PADA\s+menjalankan", re.IGNORECASE)
+    _MALAY_START   = re.compile(r"^PADA|Pada\s+menjalankan", re.IGNORECASE)
     # Signing block at end of Malay section
     _SIGNING       = re.compile(r"^(Dibuat|Made\s+\d|DATO|Yang\s+Berhormat)", re.IGNORECASE)
     # Standalone fee amount line: "1,000.00"  "300.00"
     _SOLO_FEE      = re.compile(r"^[\d,]+\.\d{2}\b")
     # Schedule column header inside English schedule
     _SCHED_COL_HDR = re.compile(
-        r"^\(Regulation \d+\)$|^FEES$|\(1\)\s*Item|\(2\)\s*Matter|\(3\)\s*Fee",
+        r"^\(Regulation \d+\)$"          # "(Regulation 8)" sub-title
+        r"|^FEES?$"                       # "FEE" or "FEES" standalone heading
+        r"|\(\d+\)\s*(Item|Matter|Fee|Penalty|Bil|Perkara|Remarks|No\.?|Description|Amount)"
+                                        # any numbered column header: (1) Item, (4) Penalty, etc.
+        r"|^(Item\s*No\.?|Description(\s+of\s+Matter)?|Amount\s*\(?RM\)?|Fee\s*\(?RM\)?)$",
+                                        # bare column header words without numbering
         re.IGNORECASE,
     )
 
@@ -1604,11 +1618,11 @@ def parse_regulation_document(
         # Keep it as content so the LLM knows the actual amount.
         # (Nothing to skip — just let it fall through to current_lines.append)
 
-        # ── Regulation heading (Title Case, not numbered) ─────────────────────
-        if _is_regulation_heading(line) and not in_schedule:
+        # ── Gazette heading (Title Case, not numbered) ─────────────────────
+        if _is_gazette_heading(line) and not in_schedule:
             _flush()
             current_heading    = line
-            current_regulation = line
+            current_gazette = line
             if len(line.split()) <= 8:
                 current_part = line
             continue
@@ -1618,7 +1632,7 @@ def parse_regulation_document(
 
     _flush()
 
-    logger.info("  Parsed %d chunks from regulation '%s'.", len(rows), source_name)
+    logger.info("  Parsed %d chunks from gazette '%s'.", len(rows), source_name)
     return rows
 
 
@@ -1686,12 +1700,15 @@ def process_csv_source(source: SourceEntry) -> List[Dict]:
 
 def write_csv(rows: List[Dict], output_path: str) -> None:
     """Write rows to the standard processed CSV format."""
-    with open(output_path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-    logger.info("  Saved %d rows -> %s", len(rows), output_path)
-
+    try:
+        with open(output_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        logger.info("  Saved %d rows -> %s", len(rows), output_path)
+    except Exception as exc:
+        logger.error("  Failed to write CSV %s : %s", output_path, exc)
+        raise
 
 # ─── Main processing function ─────────────────────────────────────────────────
 
@@ -1750,13 +1767,16 @@ def process_source(source: SourceEntry, force: bool = False) -> bool:
         elif source.doc_type == "faq":
             rows = parse_faq_document(cleaned, source.key, source.name)
 
-        elif source.doc_type == "regulation":
-            rows = parse_regulation_document(cleaned, source.key, source.name)
+        elif source.doc_type == "gazette":
+            rows = parse_gazette_document(cleaned, source.key, source.name)
+
+        elif source.doc_type == "others":
+            rows = parse_with_ai(cleaned, source.key, source.name)
 
         else:
             logger.error(
                 "  Unknown doc_type '%s'. "
-                "Valid values: act | general | faq | regulation. Skipping.",
+                "Valid values: act | general | faq | gazette. Skipping.",
                 source.doc_type,
             )
             return False
@@ -1778,7 +1798,10 @@ def process_source(source: SourceEntry, force: bool = False) -> bool:
         return False
 
     # Step 5: write output CSV
-    write_csv(rows, source.output_path)
+    try:
+        write_csv(rows, source.output_path)
+    except Exception:
+        return False
     return True
 
 
@@ -1849,14 +1872,23 @@ Rules:
 - Do NOT split a sentence across chunks
 - Each chunk must make sense on its own without surrounding context
 - For Q&A documents: one chunk = one question + its full answer
+- For tables: preserve the exact pipe-delimited format from the input.
+  Include the header row as the first line of the table in content.
+  Do NOT convert table data to prose or markdown.
 
 Return ONLY a JSON array, no preamble, no markdown fences:
 [
   {
-    "part": "PART I – PRELIMINARY",
+    "part": "PART I - PRELIMINARY",
     "section": "Section 2",
     "section_title": "Interpretation",
     "content": "In this Act, unless the context otherwise requires..."
+  },
+  {
+    "part": "PART I - PRELIMINARY",
+    "section": "Section 3",
+    "section_title": "Application",
+    "content": "This Act applies to all companies registered under..."
   }
 ]
 
@@ -1873,7 +1905,7 @@ TEXT:
             r = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
-                    "model":  "deepseek-r1:8b",
+                    "model":  os.environ.get("CHATSSM_LLM_MODEL", "deepseek-r1:8b"),
                     "prompt": CHUNK_PROMPT.format(text=page_text),
                     "stream": False,
                     "options": {"temperature": 0.0, "num_predict": 2000},
@@ -1883,8 +1915,13 @@ TEXT:
             raw = r.json().get("response", "").strip()
             # Strip any <think> blocks before parsing JSON
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-            raw = re.sub(r"```json|```", "", raw).strip()
-            parsed = json.loads(raw)
+            raw = re.sub(r"```json|```", "", raw)
+
+            m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+            if not m:
+                raise ValueError("No JSON array found in model response")
+            parsed = json.loads(m.group(0))
+
             for item in parsed:
                 content = item.get("content", "").strip()
                 if len(content) < 60:

@@ -1,0 +1,50 @@
+[
+  {
+    "qa_id": "a54d509eba57",
+    "timestamp": "2026-03-02T16:13:46.885260",
+    "query": "How to apply Striking Off?",
+    "response_snippet": "To apply for Striking Off under Section 549(a) of the Companies Act 2016:\n\n1.  **Eligibility:** The company must be a body corporate, not a holding company, not involved in legal proceedings, not making a return of capital, and not being wound up (unless specific conditions under Section 549(d) are ",
+    "citations": [
+      "Guidelines For Striking Off Section 549(a)",
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar",
+      "Guidelines For Striking Off Section 549(d)"
+    ],
+    "rating": 5,
+    "failure_type": "",
+    "comment": ""
+  },
+  {
+    "qa_id": "08bb505079dc",
+    "timestamp": "2026-03-02T16:20:51.770587",
+    "query": "how much to incorporate private company",
+    "response_snippet": "To incorporate a private company, the application fee is RM200. This fee is mentioned in the checklist for CLBG under Section 45 Companies Act 2016, point A.1.",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "FAQ - INCORPORATION",
+      "FAQs ON THE COMPANIES ACT 2016 (ACT 777) [BACKGROUND TO THE REVIEW PROCESS AND NEW MALAYSIAN COMPANIES ACT]",
+      "Checklist for CLBG (1-8)"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_source",
+    "comment": "The right answer is Section 14 of Company Act 2016"
+  },
+  {
+    "qa_id": "7ab0d412f004",
+    "timestamp": "2026-03-04T12:25:43.730575",
+    "query": "what is meant by dormant company?",
+    "response_snippet": "**Direct Answer**\nA company is dormant in a financial year if the company does not carry on business and there is no accounting transaction occurred. **(Practice Directive 10/2024, paragraph 11(a))**\n\n**Relevant Provisions**\n- Section 245(1), Companies Act 2016: \"Accounting transaction\" means a tran",
+    "citations": [
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING",
+      "FAQ - AUDIT EXEMPTION",
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Companies (Corporate Rescue Mechanism) Rules 2018"
+    ],
+    "rating": 5,
+    "failure_type": "",
+    "comment": ""
+  }
+]

@@ -20,6 +20,8 @@ Architecture
   EmbeddingService - two-level cache (RAM + disk), numpy-normalised vectors
   DocumentIndex    - per-source numpy matrix; O(1) vectorised cosine search
   KnowledgeBase    - orchestrates all indexes; merges and ranks results
+  FeedbackStore    - structured feedback JSON log
+  PromptOptimizer  - analyzes failure patterns; dynamically patches system prompt
   LLMService       - strict-grounding prompt; direct Ollama REST call
   StorageService   - chat history JSON + Q&A CSV log
 """
@@ -34,15 +36,17 @@ import os
 import pickle
 import re
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import html
 
 from chunk import Chunk, SearchResult
 
@@ -96,21 +100,22 @@ class AppConfig:
     LLM_TEMPERATURE: float = 0.0
     LLM_TOP_P:       float = 0.1
     LLM_TOP_K:       int   = 10
-    LLM_MAX_TOKENS:  int   = 3000  
+    LLM_MAX_TOKENS:  int   = 1200
     LLM_TIMEOUT:     int   = 300    # seconds
-
+    LLM_NUM_CTX: int = 6144   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
     # ── Embedding ─────────────────────────────────────────────────────────────
-    EMBEDDING_TIMEOUT: int = 60     # seconds per call
+    EMBEDDING_TIMEOUT: int = 15     # seconds per call
     EMBEDDING_WORKERS: int = 4      # Parallel workers for index building.
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
-    SIMILARITY_THRESHOLD: float = 0.35
-    TOP_K_PER_SOURCE:     int   = 6
-    GLOBAL_TOP_K:         int   = 12   # total chunks sent to LLM
+    SIMILARITY_THRESHOLD: float = 0.45
+    TOP_K_PER_SOURCE:     int   = 4
+    GLOBAL_TOP_K:         int   = 8   # total chunks sent to LLM
+    MAX_CHUNK_CHARS:     int   = 1200  # Truncate chunks in the prompt to this many characters to avoid hitting LLM token limits.
 
     # ── Paths ─────────────────────────────────────────────────────────────────
     SOURCES_CONFIG:  str = "knowledge_sources.json"
-    SOURCES_DIR:     str = os.path.join("knowledge_base", "sources")   # auto-discovery root
+    SOURCES_DIR:     str = os.path.join("knowledge_base", "sources")
     PROCESSED_DIR:   str = os.path.join("knowledge_base", "processed")
     CACHE_DIR:       str = os.path.join("knowledge_base", "embeddings")
     DATA_DIR:        str = "qa_data"
@@ -125,6 +130,7 @@ AppConfig.ensure_dirs()
 
 _CHAT_HISTORY_FILE = os.path.join(AppConfig.DATA_DIR, "chat_history.json")
 _QA_LOG_FILE       = os.path.join(AppConfig.DATA_DIR, "qa_log.csv")
+_FEEDBACK_FILE     = os.path.join(AppConfig.DATA_DIR, "feedback.json")
 _EMBEDDING_CACHE   = os.path.join(AppConfig.CACHE_DIR, "embedding_cache.pkl")
 
 # =============================================================================
@@ -134,13 +140,16 @@ _EMBEDDING_CACHE   = os.path.join(AppConfig.CACHE_DIR, "embedding_cache.pkl")
 
 @dataclass
 class SourceEntry:
-    key:        str
-    name:       str
-    category:   str
-    type:       str           # "pdf" or "csv"
-    enabled:    bool = True
-    url:        Optional[str] = None
-    local_path: Optional[str] = None
+    key:             str
+    name:            str
+    category:        str
+    type:            str              # "pdf" or "csv"
+    enabled:         bool = True
+    url:             Optional[str] = None
+    local_path:      Optional[str] = None
+    # BUG FIX: was missing from SourceEntry — getattr on this field always
+    # returned [] making Act-based retrieval filtering completely non-functional.
+    relates_to_acts: List[str] = field(default_factory=list)
 
     @property
     def processed_csv(self) -> str:
@@ -160,7 +169,7 @@ _VALID_CATEGORIES: List[str] = [
     "Legislations", "Practice Notes", "Practice Directives",
     "Guidelines", "Circular", "FAQ", "Forms",
 ]
-_VALID_DOC_TYPES: List[str] = ["act", "general", "faq"]
+_VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "others"]
 
 
 def _filename_to_key(filename: str) -> str:
@@ -244,13 +253,14 @@ class SourceRegistry:
             try:
                 key = raw["key"]
                 overrides[key] = SourceEntry(
-                    key        = key,
-                    name       = raw.get("name", key),
-                    category   = raw.get("category", ""),
-                    type       = raw.get("type", "pdf"),
-                    enabled    = raw.get("enabled", True),
-                    url        = raw.get("url"),
-                    local_path = raw.get("local_path"),
+                    key             = key,
+                    name            = raw.get("name", key),
+                    category        = raw.get("category", ""),
+                    type            = raw.get("type", "pdf"),
+                    enabled         = raw.get("enabled", True),
+                    url             = raw.get("url"),
+                    local_path      = raw.get("local_path"),
+                    relates_to_acts = raw.get("relates_to_acts", []),  # BUG FIX: now loaded
                 )
             except KeyError:
                 pass
@@ -266,13 +276,14 @@ class SourceRegistry:
             if key in merged:
                 base = merged[key]
                 merged[key] = SourceEntry(
-                    key        = key,
-                    name       = je.name if je.name != key else base.name,
-                    category   = je.category or base.category,
-                    type       = je.type,
-                    enabled    = je.enabled,
-                    url        = je.url or base.url,
-                    local_path = je.local_path or base.local_path,
+                    key             = key,
+                    name            = je.name if je.name != key else base.name,
+                    category        = je.category or base.category,
+                    type            = je.type,
+                    enabled         = je.enabled,
+                    url             = je.url or base.url,
+                    local_path      = je.local_path or base.local_path,
+                    relates_to_acts = je.relates_to_acts or base.relates_to_acts,
                 )
             else:
                 merged[key] = je
@@ -331,14 +342,8 @@ class EmbeddingService:
       L2 - pickle on disk   (survives app restarts)
 
     Thread safety:
-      _disk_lock  - serialises all writes to the pickle file
+      _disk_lock  - serialises all writes AND reads to the pickle dict
       _mem_lock   - serialises reads/writes to the shared in-memory dict
-
-    Parallel embedding (embed_batch):
-      Sends N requests to Ollama simultaneously using a ThreadPoolExecutor.
-      Because each request is pure I/O (waiting for Ollama to respond),
-      Python's GIL is not a bottleneck. With 4 workers you typically get
-      3–4× speedup on a CPU-only machine and 6–8× on a GPU-accelerated one.
     """
 
     def __init__(self) -> None:
@@ -360,10 +365,15 @@ class EmbeddingService:
             if key in self._mem:
                 _bump(hit=True)
                 return self._mem[key]
+
+        # BUG FIX: check _disk under its own lock, not _mem_lock
+        with self._disk_lock:
             if key in self._disk:
                 _bump(hit=True)
-                self._mem[key] = self._disk[key]
-                return self._disk[key]
+                vec = self._disk[key]
+                with self._mem_lock:
+                    self._mem[key] = vec
+                return vec
 
         _bump(hit=False)
         raw = self._call_api(text)
@@ -389,35 +399,38 @@ class EmbeddingService:
             progress_cb - optional callable(completed, total) called after each result
 
         Returns a list the same length as `texts`; failed embeddings are None.
-
-        How it works:
-            ThreadPoolExecutor submits all requests at once. Ollama queues them
-            internally. Because the bottleneck is GPU/CPU compute inside Ollama
-            (not Python), more workers = more throughput up to Ollama's concurrency
-            limit (usually equal to your GPU count).
         """
         total   = len(texts)
         results: Dict[int, Optional[np.ndarray]] = {}
 
         # Check cache first — avoid sending already-cached texts to Ollama at all
-        to_fetch: Dict[int, str] = {}      # index → text
+        to_fetch: Dict[int, str] = {}
         for i, text in enumerate(texts):
             if not text or not text.strip():
                 results[i] = None
                 continue
             key = hashlib.md5(text.encode()).hexdigest()
+
+            cached = False
             with self._mem_lock:
                 if key in self._mem:
                     _bump(hit=True)
                     results[i] = self._mem[key]
-                    continue
-                if key in self._disk:
-                    _bump(hit=True)
-                    vec = self._disk[key]
-                    self._mem[key] = vec
-                    results[i] = vec
-                    continue
-            to_fetch[i] = text
+                    cached = True
+
+            if not cached:
+                # BUG FIX: check _disk under _disk_lock, not _mem_lock
+                with self._disk_lock:
+                    if key in self._disk:
+                        _bump(hit=True)
+                        vec = self._disk[key]
+                        with self._mem_lock:
+                            self._mem[key] = vec
+                        results[i] = vec
+                        cached = True
+
+            if not cached:
+                to_fetch[i] = text
 
         logger.info(
             "embed_batch: %d cached, %d to fetch (workers=%d)",
@@ -430,20 +443,16 @@ class EmbeddingService:
             return [results.get(i) for i in range(total)]
 
         # Fetch uncached texts in parallel
-        completed = total - len(to_fetch)   # already satisfied from cache
+        completed = total - len(to_fetch)
 
         def _fetch(idx_text: Tuple[int, str]) -> Tuple[int, Optional[np.ndarray]]:
-            # NOTE: do NOT call _bump() or touch st.session_state here.
-            # Worker threads have no Streamlit ScriptRunContext — any call to
-            # st.session_state from a background thread raises a warning and
-            # silently does nothing. Counts are updated in the main thread below.
             idx, text = idx_text
             raw = self._call_api(text)
             if raw is None:
                 return idx, None
             vec = self._normalise(np.array(raw, dtype=np.float32))
-            key = hashlib.md5(text.encode()).hexdigest()
-            self._store(key, vec)
+            k = hashlib.md5(text.encode()).hexdigest()
+            self._store(k, vec)
             return idx, vec
 
         misses = 0
@@ -452,16 +461,14 @@ class EmbeddingService:
             for future in as_completed(futures):
                 idx, vec = future.result()
                 results[idx] = vec
-                misses += 1        # every fetch from Ollama is a cache miss
+                misses += 1
                 completed += 1
                 if progress_cb:
                     progress_cb(completed, total)
 
-        # Update cache stats from the main thread where st.session_state is safe
         for _ in range(misses):
             _bump(hit=False)
 
-        # Flush disk cache once after all parallel writes
         self._save_disk()
 
         return [results.get(i) for i in range(total)]
@@ -487,7 +494,8 @@ class EmbeddingService:
     def _store(self, key: str, vec: np.ndarray) -> None:
         """Thread-safe write to both cache levels. Does NOT flush disk."""
         with self._mem_lock:
-            self._mem[key]  = vec
+            self._mem[key] = vec
+        with self._disk_lock:
             self._disk[key] = vec
 
     def _call_api(self, text: str) -> Optional[List[float]]:
@@ -499,7 +507,10 @@ class EmbeddingService:
                 timeout=AppConfig.EMBEDDING_TIMEOUT,
             )
             if r.status_code == 200:
-                return r.json().get("embedding")
+                emb = r.json().get("embedding")
+                if emb is None:
+                    logger.warning("Ollama returned HTTP 200 but no 'embedding' key. Model may not be loaded.")
+                return emb
             logger.warning("Embeddings API returned HTTP %s.", r.status_code)
         except requests.ConnectionError:
             logger.error("Cannot reach Ollama. Is 'ollama serve' running?")
@@ -523,7 +534,7 @@ class EmbeddingService:
                 logger.info("Numpy version mismatch detected. Removing old cache.")
                 try:
                     os.remove(_EMBEDDING_CACHE)
-                except:
+                except Exception:
                     pass
             return {}
 
@@ -532,6 +543,7 @@ class EmbeddingService:
         with self._disk_lock:
             try:
                 with open(_EMBEDDING_CACHE, "wb") as fh:
+                    os.chmod(_EMBEDDING_CACHE, 0o600) 
                     pickle.dump(self._disk, fh)
             except Exception as exc:
                 logger.warning("Disk cache save failed: %s", exc)
@@ -547,8 +559,7 @@ class DocumentIndex:
     Stores all chunks for ONE source as a (N, D) numpy matrix.
 
     Search is a single matrix multiply: scores = matrix @ query_vec
-    This is 50–100× faster than a Python loop for large sources.
-    Embeddings are unit-normalised so the dot product equals cosine similarity.
+    Embeddings are unit-normalised so dot product equals cosine similarity.
     """
 
     def __init__(
@@ -559,13 +570,13 @@ class DocumentIndex:
         emb:         EmbeddingService,
         registry:    SourceRegistry,
     ) -> None:
-        self._key     = source_key
-        self._name    = source_name
-        self._cat     = category
-        self._emb     = emb
+        self._key      = source_key
+        self._name     = source_name
+        self._cat      = category
+        self._emb      = emb
         self._registry = registry
-        self._chunks: List[Chunk]          = []
-        self._matrix: Optional[np.ndarray] = None   # shape (N, D)
+        self._chunks:  List[Chunk]          = []
+        self._matrix:  Optional[np.ndarray] = None   # shape (N, D)
 
     # ── Readiness ─────────────────────────────────────────────────────────────
 
@@ -575,13 +586,6 @@ class DocumentIndex:
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def build(self, df: pd.DataFrame) -> bool:
-        """
-        Build index from the pre-processed DataFrame produced by preprocess.py.
-
-        Each row becomes one Chunk. The text sent to the embedding model is:
-          "<section> (<part>): <section_title>\\n\\n<content>"
-        This matches the format seen during queries so retrieval is accurate.
-        """
         logger.info(
             "Building index '%s' [%s] — %d rows.", self._name, self._cat, len(df)
         )
@@ -596,7 +600,6 @@ class DocumentIndex:
             title   = str(row.get("section_title", "")).strip()
             part    = str(row.get("part", "")).strip()
 
-            # Build the text that will be embedded
             header = f"{section}"
             if part:
                 header += f" ({part})"
@@ -604,14 +607,15 @@ class DocumentIndex:
                 header += f": {title}"
             chunk_text = f"{header}\n\n{content}" if header.strip(": ") else content
 
+            src_entry = self._registry.get(self._key)
             raw.append(Chunk(
-                text        = chunk_text,
-                source_key  = self._key,
-                source_name = self._name,
-                category    = self._cat,
-                section     = section,
-                part        = part,
-                relates_to_acts  = getattr(self._registry.get(self._key), 'relates_to_acts', []),
+                text             = chunk_text,
+                source_key       = self._key,
+                source_name      = self._name,
+                category         = self._cat,
+                section          = section,
+                part             = part,
+                relates_to_acts  = src_entry.relates_to_acts if src_entry else [],
             ))
 
         return self._embed_and_build(raw)
@@ -622,13 +626,11 @@ class DocumentIndex:
         if self._matrix is None or not self._chunks:
             return []
 
-        # Vectorised dot product (cosine similarity because vectors are unit-norm)
-        scores: np.ndarray = self._matrix @ query_vec            # shape (N,)
+        scores: np.ndarray = self._matrix @ query_vec   # shape (N,)
 
-        # Efficient partial sort: get the top candidates without full sort
-        k      = min(AppConfig.TOP_K_PER_SOURCE * 3, len(scores))
-        top    = np.argpartition(scores, -k)[-k:]
-        top    = top[np.argsort(scores[top])[::-1]]
+        k   = min(AppConfig.TOP_K_PER_SOURCE * 3, len(scores))
+        top = np.argpartition(scores, -k)[-k:]
+        top = top[np.argsort(scores[top])[::-1]]
 
         results: List[SearchResult] = []
         for idx in top:
@@ -651,6 +653,7 @@ class DocumentIndex:
         try:
             with open(self._cache_path, "wb") as fh:
                 pickle.dump({"chunks": self._chunks, "matrix": self._matrix}, fh)
+            os.chmod(self._cache_path, 0o600)
             logger.info("Saved index '%s'.", self._key)
         except Exception as exc:
             logger.warning("Could not save index '%s': %s", self._key, exc)
@@ -663,9 +666,7 @@ class DocumentIndex:
                 payload = pickle.load(fh)
             self._chunks = payload["chunks"]
             self._matrix = payload["matrix"]
-            logger.info(
-                "Loaded index '%s': %d chunks.", self._key, len(self._chunks)
-            )
+            logger.info("Loaded index '%s': %d chunks.", self._key, len(self._chunks))
             return True
         except Exception as exc:
             logger.warning("Failed to load index '%s': %s", self._key, exc)
@@ -678,17 +679,10 @@ class DocumentIndex:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _embed_and_build(self, raw: List[Chunk]) -> bool:
-        """
-        Embed all chunks in parallel then build the numpy matrix.
-
-        Progress is logged every 10% so you can see it moving in the console.
-        The disk cache is flushed once at the end of embed_batch (not per chunk),
-        which avoids hundreds of slow pickle writes.
-        """
         total = len(raw)
         logger.info("  Embedding %d chunks (workers=%d) …", total, AppConfig.EMBEDDING_WORKERS)
 
-        last_pct = [0]   # mutable cell for the closure below
+        last_pct = [0]
 
         def _progress(done: int, tot: int) -> None:
             pct = int(done / tot * 100)
@@ -728,34 +722,29 @@ class KnowledgeBase:
     """
     One DocumentIndex per source.
     On first query, loads the pre-processed CSV and builds the index (cached).
-    Subsequent queries use the in-memory numpy matrix — instant.
     """
 
     def __init__(self, registry: SourceRegistry, emb: EmbeddingService) -> None:
-        self._registry  = registry
-        self._emb       = emb
-        self._indexes:  Dict[str, DocumentIndex] = {}
+        self._registry = registry
+        self._emb      = emb
+        self._indexes: Dict[str, DocumentIndex] = {}
 
     # ── Index lifecycle ───────────────────────────────────────────────────────
 
     def get_or_build(self, source: SourceEntry) -> Optional[DocumentIndex]:
         """Return a ready index, building it if needed."""
-        # Already in memory
         if source.key in self._indexes and self._indexes[source.key].is_ready():
             return self._indexes[source.key]
 
         idx = DocumentIndex(source.key, source.name, source.category, self._emb, self._registry)
 
-        # Try loading from disk cache first (fast)
         if idx.load():
             self._indexes[source.key] = idx
             return idx
 
-        # Build from the pre-processed CSV (slower, done once)
         if not source.is_ready:
             logger.warning(
-                "Source '%s' has no processed CSV. "
-                "Run:  python preprocess.py --key %s",
+                "Source '%s' has no processed CSV. Run:  python preprocess.py --key %s",
                 source.key, source.key,
             )
             return None
@@ -816,61 +805,61 @@ class KnowledgeBase:
     def _detect_query_act(self, query: str) -> Optional[str]:
         """
         Detect which Act the user is asking about from their query.
-        
-        Returns: "Companies Act 2016" | "LLP Act 2012" | "Registration Act 1956" | None
+        Requires at least 2 matched keywords to reduce false positives.
+
+        BUG FIX: Removed overly generic keywords like "business" and "shares"
+        that caused false Act attribution on broad queries.
         """
         query_lower = query.lower()
-        
-        # Keywords mapping
+
         act_keywords = {
             "Companies Act 2016": [
-                "company", "companies", "director", "shareholder", "shares",
-                "incorporation", "memorandum", "articles", "board meeting",
-                "annual general meeting", "agm", "companies act", "act 777"
+                "company", "companies", "director", "shareholder",
+                "incorporation", "memorandum", "articles of association",
+                "board meeting", "annual general meeting", "agm",
+                "companies act", "act 777", "company secretary",
+                "winding up", "deregistration",
             ],
             "LLP Act 2012": [
-                "llp", "limited liability partnership", "partnership",
-                "partner", "llp act", "act 743"
+                "llp", "limited liability partnership",
+                "llp partner", "llp act", "act 743",
+                "limited liability",
             ],
             "Registration of Businesses Act 1956": [
-                "sole proprietor", "sole proprietorship", "business",
-                "registration of business", "act 197"
-            ]
+                "sole proprietor", "sole proprietorship",
+                "registration of business", "act 197",
+                "business registration", "rob act",
+            ],
         }
-        
+
+        best_act: Optional[str] = None
+        best_count = 0
         for act, keywords in act_keywords.items():
             matches = sum(1 for kw in keywords if kw in query_lower)
-            if matches >= 2:  # Need at least 2 keyword matches
-                return act
-        
-        return None
+            if matches >= 2 and matches > best_count:
+                best_act   = act
+                best_count = matches
+
+        if best_act:
+            logger.info("Detected Act from query: %s (%d keyword matches)", best_act, best_count)
+        return best_act
 
     # ── Search ────────────────────────────────────────────────────────────────
 
     def search(
         self,
-        query:           str,
-        selected_keys:   List[str],
-        cat_filter:      Optional[List[str]] = None,
+        query:         str,
+        selected_keys: List[str],
+        cat_filter:    Optional[List[str]] = None,
     ) -> Dict:
         """
         Embed the query, search all selected indexes, merge and rank results.
-
-        Returns:
-          {
-            "chunks":         List[str]          - top texts for the LLM prompt
-            "results":        List[SearchResult] - full detail for UI display
-            "citations":      List[str]          - source names used
-            "categories_hit": List[str]          - categories that returned hits
-            "found":          bool
-          }
         """
         query_vec = self._emb.embed(query)
         if query_vec is None:
             return _empty()
-        
+
         detected_act = self._detect_query_act(query)
-        logger.info(f"Detected user is asking about: {detected_act or 'unspecified'}")
 
         hits_by_source: Dict[str, List[Tuple[SearchResult, SourceEntry]]] = {}
 
@@ -884,57 +873,46 @@ class KnowledgeBase:
             if idx is None:
                 continue
 
-            # ← NEW: Check if this source relates to the detected Act
-            source_relates_to = getattr(source, 'relates_to_acts', [])
-            
-            if detected_act and source_relates_to:
-                # User asked about specific Act, but source relates to different Acts
-                if detected_act not in source_relates_to:
-                    # Only include this source if:
-                    # 1. It's the main Act (source.category == "Legislations")
-                    # 2. OR it relates to multiple Acts (guidelines, general docs)
-                    is_main_act = source.category == "Legislations"
-                    relates_to_multiple = len(source_relates_to) > 1
-                    
-                    if not (is_main_act or relates_to_multiple):
-                        logger.info(
-                            f"  Skipping '{source.name}' (relates to {source_relates_to}, "
-                            f"but query is about {detected_act})"
-                        )
-                        continue
+            source_relates_to = source.relates_to_acts  # now works correctly
 
-            source_hits = []
-            for result in idx.search(query_vec):
-                source_hits.append((result, source))
+            if detected_act and source.category == "Legislations":
+                # For main Acts, SKIP if wrong act
+                source_relates_to = getattr(source, 'relates_to_acts', [detected_act])
+                if source_relates_to and detected_act not in source_relates_to:
+                    logger.info(
+                        "  Skipping '%s' (relates to %s, query is about %s)",
+                        source.name, source_relates_to, detected_act,
+                    )
+                    continue
 
+            try:
+                source_hits = [(r, source) for r in idx.search(query_vec)]
+            except Exception as exc:
+                logger.error("Index search failed for '%s': %s. Try clearing the cache.", source.key, exc)
+                continue
             if source_hits:
                 hits_by_source[source.key] = source_hits
-                logger.info(
-                    "  Source '%s': %d results",
-                    source.name, len(source_hits)
-                )
+                logger.info("  Source '%s': %d results", source.name, len(source_hits))
 
         all_hits: List[Tuple[SearchResult, SourceEntry]] = []
+        for source_results in hits_by_source.values():
+            all_hits.extend(source_results[:AppConfig.TOP_K_PER_SOURCE])
 
-        for source_key, source_results in hits_by_source.items():
-            for result, source in source_results[:AppConfig.TOP_K_PER_SOURCE]:
-                all_hits.append((result, source))
-
-        # Global rank by score
         all_hits.sort(key=lambda x: x[0].score, reverse=True)
 
-        # Deduplicate and cap
-        seen:          set            = set()
-        chunks:        List[str]      = []
+        seen:          set                = set()
+        chunks:        List[str]          = []
+        chunk_sources: List[str]          = []
         results:       List[SearchResult] = []
-        citations:     List[str]      = []
-        cats_hit:      List[str]      = []
+        citations:     List[str]          = []
+        cats_hit:      List[str]          = []
 
         for result, source in all_hits:
             if result.chunk.text in seen:
                 continue
             seen.add(result.chunk.text)
             chunks.append(result.chunk.text)
+            chunk_sources.append(source.name)
             results.append(result)
             if source.name not in citations:
                 citations.append(source.name)
@@ -945,19 +923,17 @@ class KnowledgeBase:
 
         return {
             "chunks":         chunks,
+            "chunk_sources":  chunk_sources,
             "results":        results,
             "citations":      citations,
             "categories_hit": cats_hit,
             "found":          bool(chunks),
+            "detected_act":   detected_act,
         }
 
     # ── Status ────────────────────────────────────────────────────────────────
 
     def index_status(self) -> Dict[str, str]:
-        """
-        Returns {source_key: status_string} for all enabled sources.
-        Possible statuses: "ready", "cached", "needs_preprocess", "not_indexed"
-        """
         status: Dict[str, str] = {}
         for src in self._registry.all_enabled():
             if src.key in self._indexes and self._indexes[src.key].is_ready():
@@ -974,10 +950,219 @@ class KnowledgeBase:
 
 
 def _empty() -> Dict:
+    # BUG FIX: added chunk_sources so llm.generate() never KeyErrors
     return {
-        "chunks": [], "results": [], "citations": [],
-        "categories_hit": [], "found": False,
+        "chunks": [], "chunk_sources": [], "results": [],
+        "citations": [], "categories_hit": [], "found": False,
     }
+
+
+# =============================================================================
+# FEEDBACK STORE
+# =============================================================================
+
+class FeedbackStore:
+    """
+    Persists structured per-message feedback to a JSON file.
+
+    Each entry contains:
+        qa_id        - unique ID of the Q&A exchange
+        timestamp    - ISO datetime
+        query        - full user question
+        response_snippet - first 300 chars of response (for review)
+        citations    - sources cited
+        rating       - 5 (helpful) | 3 (okay) | 1 (needs work)
+        failure_type - one of FAILURE_TYPES keys (only for rating <= 2)
+        comment      - optional free-text from the user
+    """
+
+    FAILURE_TYPES: Dict[str, str] = {
+        "wrong_source":   "🔗 Wrong source cited",
+        "hallucination":  "🌀 Hallucination / made-up info",
+        "incorrect":      "❌ Factually incorrect answer",
+        "incomplete":     "📋 Incomplete answer",
+        "out_of_scope":   "🚫 Should have said 'not in documents'",
+        "other":          "💬 Other",
+    }
+
+    def __init__(self, path: str = _FEEDBACK_FILE) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+
+    def save(
+        self,
+        qa_id:        str,
+        query:        str,
+        response:     str,
+        citations:    List[str],
+        rating:       int,
+        failure_type: Optional[str] = None,
+        comment:      str = "",
+    ) -> None:
+        entry = {
+            "qa_id":            qa_id,
+            "timestamp":        datetime.now().isoformat(),
+            "query":            query,
+            "response_snippet": response[:300],
+            "citations":        citations,
+            "rating":           rating,
+            "failure_type":     failure_type or "",
+            "comment":          comment.strip(),
+        }
+        with self._lock:
+            records = self._load_raw()
+            records.append(entry)
+            try:
+                with open(self._path, "w", encoding="utf-8") as fh:
+                    json.dump(records, fh, indent=2, ensure_ascii=False)
+            except Exception as exc:
+                logger.error("FeedbackStore save failed: %s", exc)
+
+    def load(self) -> List[Dict]:
+        with self._lock:
+            return self._load_raw()
+
+    def _load_raw(self) -> List[Dict]:
+        if not os.path.exists(self._path):
+            return []
+        try:
+            with open(self._path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            logger.warning("FeedbackStore load failed: %s", exc)
+            return []
+
+    def summary(self) -> Dict:
+        """Aggregate stats for the analytics panel."""
+        records   = self.load()
+        total     = len(records)
+        positive  = sum(1 for r in records if r.get("rating", 0) >= 4)
+        neutral   = sum(1 for r in records if r.get("rating", 0) == 3)
+        negative  = sum(1 for r in records if r.get("rating", 0) <= 2)
+
+        failure_counts: Dict[str, int] = {k: 0 for k in self.FAILURE_TYPES}
+        for r in records:
+            ft = r.get("failure_type", "")
+            if ft in failure_counts:
+                failure_counts[ft] += 1
+
+        return {
+            "total":          total,
+            "positive":       positive,
+            "neutral":        neutral,
+            "negative":       negative,
+            "failure_counts": failure_counts,
+            "records":        records,
+        }
+
+
+# =============================================================================
+# PROMPT OPTIMIZER
+# =============================================================================
+
+class PromptOptimizer:
+    """
+    Analyzes FeedbackStore failure patterns and dynamically injects corrective
+    rule reinforcements into the LLM system prompt.
+
+    How it works:
+        1. Load all negative feedback (rating <= 2) from FeedbackStore.
+        2. For each failure category that exceeds PATCH_THRESHOLD of total
+           negative feedback, inject a targeted reinforcement block into
+           the system prompt.
+        3. LLMService calls get_patches() on every request so improvements
+           take effect immediately after enough feedback accumulates.
+
+    Tuning:
+        Lower PATCH_THRESHOLD to activate patches with less data.
+        Each patch is a short, forceful rule addition placed BEFORE the
+        formatted answer request so the model sees it at high attention weight.
+    """
+
+    PATCH_THRESHOLD: float = 0.25   # 25% of negative feedback triggers a patch
+    MIN_NEGATIVE:    int   = 3      # don't patch until at least N negatives
+
+    _PATCHES: Dict[str, str] = {
+        "wrong_source": """\
+⚠️ CITATION ACCURACY — SYSTEM REINFORCEMENT (past errors detected):
+  • The [SOURCE: name] label appears IMMEDIATELY above each passage.
+  • You MUST cite the exact source name from the label directly above the text you quote.
+  • NEVER attribute content from one source to a different source name.
+  • If two sources contain similar text, cite BOTH with their exact [SOURCE: ...] names.""",
+
+        "hallucination": """\
+⚠️ ANTI-HALLUCINATION — SYSTEM REINFORCEMENT (fabrications detected):
+  • Re-read each sentence of the CONTEXT block before writing your answer.
+  • Every number, date, deadline, threshold, and proper noun MUST be copied verbatim.
+  • If you cannot find explicit support in CONTEXT, immediately use the out-of-scope response.
+  • Do NOT approximate, infer, or extrapolate from nearby information.""",
+
+        "incorrect": """\
+⚠️ ACCURACY — SYSTEM REINFORCEMENT (incorrect answers detected):
+  • Do NOT paraphrase or substitute synonyms for legal text under any circumstances.
+  • Reproduce the exact statutory language; legal meaning depends on exact wording.
+  • Double-check every section number, subsection reference, and Act name before writing.""",
+
+        "incomplete": """\
+⚠️ COMPLETENESS — SYSTEM REINFORCEMENT (incomplete answers detected):
+  • Address ALL sub-parts of the user's question explicitly.
+  • If the CONTEXT contains multiple relevant sections, quote and cite ALL of them.
+  • Do not stop after the first relevant passage; scan the entire CONTEXT block.""",
+
+        "out_of_scope": """\
+⚠️ SCOPE DETECTION — SYSTEM REINFORCEMENT (over-answering detected):
+  • Apply a stricter standard: if you cannot find EXACT textual support, say it is not found.
+  • Partial matches and indirect implications do not count as explicit support.
+  • It is always better to use the out-of-scope response than to speculate.""",
+    }
+
+    def __init__(self, feedback_store: FeedbackStore) -> None:
+        self._store = feedback_store
+
+    def get_patches(self) -> str:
+        """
+        Return a string of active prompt patches based on current failure patterns.
+        Returns empty string when there is insufficient data or no patterns qualify.
+        """
+        summary = self._store.summary()
+        negative = summary["negative"]
+
+        if negative < self.MIN_NEGATIVE:
+            return ""
+
+        counts = summary["failure_counts"]
+        active: List[str] = []
+
+        for key, patch_text in self._PATCHES.items():
+            if counts.get(key, 0) / negative >= self.PATCH_THRESHOLD:
+                active.append(patch_text)
+                logger.info(
+                    "PromptOptimizer: activating patch '%s' (%.0f%% of negatives)",
+                    key, counts[key] / negative * 100,
+                )
+
+        return ("\n\n" + "\n\n".join(active)) if active else ""
+
+    def active_patch_names(self) -> List[str]:
+        """Return the human-readable names of currently active patches."""
+        summary  = self._store.summary()
+        negative = summary["negative"]
+        if negative < self.MIN_NEGATIVE:
+            return []
+
+        counts = summary["failure_counts"]
+        labels = {
+            "wrong_source":  "Citation accuracy reinforcement",
+            "hallucination": "Anti-hallucination reinforcement",
+            "incorrect":     "Accuracy reinforcement",
+            "incomplete":    "Completeness reinforcement",
+            "out_of_scope":  "Scope detection reinforcement",
+        }
+        return [
+            labels[k]
+            for k in labels
+            if counts.get(k, 0) / negative >= self.PATCH_THRESHOLD
+        ]
 
 
 # =============================================================================
@@ -988,11 +1173,10 @@ def _empty() -> Dict:
 class LLMService:
     """
     Builds the prompt and calls Ollama.
-    The system prompt enforces strict grounding: every claim must be quoted
-    verbatim from the CONTEXT block with a section citation.
+    Accepts dynamic prompt patches from PromptOptimizer.
     """
 
-    _SYSTEM = """\
+    _SYSTEM_BASE = """\
 You are a precise legal reference assistant for Suruhanjaya Syarikat Malaysia (SSM).
 Your sole purpose is to provide information that is EXPLICITLY stated in the documents
 provided in the CONTEXT block below.
@@ -1009,6 +1193,8 @@ RULE 2 - MANDATORY CITATIONS
   • Format:  **(Section 14(1), Companies Act 2016)**
              **(Section 7, Registration of Businesses Act 1956)**
              **(Practice Note No. 3/2018, paragraph 8)**
+  • The source name in your citation MUST match the [SOURCE: ...] label
+    in the CONTEXT block immediately above the text you are quoting.
   • If multiple sources support a statement, cite all of them.
 
 RULE 3 - OUT-OF-SCOPE RESPONSE
@@ -1017,49 +1203,37 @@ RULE 3 - OUT-OF-SCOPE RESPONSE
      Please consult a licensed professional or contact SSM directly at www.ssm.com.my."
   • Do NOT attempt to answer from memory or inference.
 
-RULE 4 - ACT IDENTIFICATION
-  Before answering, identify which Act applies:
-  • Companies / Directors / Shareholders / Company Secretary
-      → Companies Act 2016 (Act 777)
-  • Businesses / Sole Proprietorship / Partnership / Business Registration
-      → Registration of Businesses Act 1956 (Act 197)
-  • LLP / Limited Liability Partnership
-      → Limited Liability Partnership Act 2012 (Act 743)
-  • Operational or procedural matters may additionally be governed by
-    Practice Notes, Pratice Directives, Guidelines, or Circulars issued by SSM.
-
-RULE 5 - RESPONSE FORMAT (MANDATORY — follow this structure exactly)
+RULE 4 - RESPONSE FORMAT (MANDATORY — follow this structure exactly)
   Use markdown. The response will be rendered in a web interface that supports
   **bold**, bullet points, numbered lists, and headings.
 
   Structure every response as follows:
 
-  ## [Applicable Act or Document Name]
-
   **Direct Answer**
-  One or two sentences using exact wording from the Act, with citation.
+  One to three sentences using exact wording from the CONTEXT, with citation.
 
   **Relevant Provisions**
-  Quote or closely paraphrase the exact section(s), each on its own line:
+  Quote the exact section(s) verbatim, each on its own line:
   - Section X(Y): "[exact text from the Act]" **(Section X(Y), Act Name)**
   - Section X(Z): "[exact text]" **(Section X(Z), Act Name)**
 
   **Practical Notes** *(only include if directly supported by the CONTEXT)*
-  - Any conditions, exceptions, or deadlines stated in the Act.
+  - Briefly explain how this applies to the user's query in practice.
+  - Any conditions, exceptions, or deadlines stated in the context.
 
   ---
-  *For professional assistance, consult a Licensed Secretary or a member of
-  the Professional Bodies listed in the 4th Schedule of the Companies Act 2016.*
-
   *This response is for informational purposes only and does not constitute
   legal advice. Always verify against the current official legislation.*
 
-RULE 6 - NO THINKING OUT LOUD
-  Do NOT output any internal reasoning, deliberation, or chain-of-thought.
-  Go directly to the formatted answer. Never output <think> tags or similar.
+  (Strictly only if user's query is related to Companies Act 2016) *For professional assistance, consult a Licensed Secretary or a member of
+  the Professional Bodies listed in the 4th Schedule of the Companies Act 2016.*
+
+RULE 5 - NO THINKING OUT LOUD
+  - Do NOT output any internal reasoning, deliberation, or chain-of-thought.
+  - Go directly to the formatted answer. Never output <think> tags or similar.
 """
 
-    def generate(self, query: str, context_chunks: List[str], citations: Optional[List[str]] = None) -> str:
+    def generate(self, query, context_chunks, citations=None, prompt_patches="", detected_act=None):
         if not context_chunks:
             return (
                 "No relevant sections were found in the selected knowledge sources. "
@@ -1067,58 +1241,57 @@ RULE 6 - NO THINKING OUT LOUD
                 "licensed professional."
             )
 
-        # BUILD CONTEXT WITH SOURCE NAMES
+        # Build the system prompt: base rules + any active patches
+        system = self._SYSTEM_BASE
+        if prompt_patches:
+            system += f"\n{prompt_patches}\n"
+
+        # Build context with source labels
         context_parts = []
         for i, chunk in enumerate(context_chunks):
             source_name = citations[i] if citations and i < len(citations) else f"Source {i+1}"
-            context_parts.append(f"[SOURCE: {source_name}]\n{chunk}")
-        
+            context_parts.append(f"[SOURCE: {source_name}]\n{chunk}\n[/SOURCE: {source_name}]")
+
         context_block = "\n\n".join(context_parts)
 
+        act_hint = (
+            f"\nNOTE: This query relates to the {detected_act}. "
+            f"Prioritize chunks from that Act when constructing your answer.\n"
+        ) if detected_act else ""
+
         prompt = (
-            f"{self._SYSTEM}"
-            f"CONTEXT FROM SSM OFFICIAL DOCUMENTS:\n"
+            f"<<CONTEXT_BLOCK>>\n"
             f"{'─' * 72}\n"
             f"{context_block}\n"
             f"{'─' * 72}\n\n"
-            f"USER QUESTION:\n{query}\n\n"
+            f"<<USER_QUESTION>>\n{query}\n\n"
+            f"{act_hint}\n"
             f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
         )
 
-        raw = self._call(prompt)
+        raw = "".join(self._call(prompt, system=system))
+        # Retry once if response is empty or suspiciously short
+        if len(raw.strip()) < 30 and not raw.startswith("❌"):
+            logger.warning("LLM returned near-empty response; retrying once.")
+            raw = "".join(self._call(prompt, system=system))
         return self._postprocess(raw)
 
     @staticmethod
     def _postprocess(text: str) -> str:
-        """
-        Clean the raw LLM output before storing and displaying it.
+        if (text.startswith("❌") or text.startswith("No relevant sections") or text.startswith("This information is not found")):
+            return text
 
-        Steps
-        -----
-        1. Strip deepseek-r1 / reasoning model chain-of-thought blocks:
-           <think>…</think>, <thinking>…</thinking>, <reasoning>…</reasoning>
+        # Strip reasoning blocks
+        text = re.sub(
+            r"<(?:think|thinking|reasoning|reflection)>.*?</(?:think|thinking|reasoning|reflection)>",
+            "", text, flags=re.DOTALL | re.IGNORECASE
+        )
 
-        2. Collapse runs of 3+ blank lines to 2.
-
-        3. Detect truncated responses (model hit token limit mid-sentence)
-           and append a notice so the user knows the answer was cut off,
-           rather than silently displaying an incomplete legal statement.
-        """
-        # ── Remove thinking / reasoning blocks ───────────────────────────────
-        text = re.sub(r"<think>.*?</think>",           "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<thinking>.*?</thinking>",     "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<reasoning>.*?</reasoning>",   "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<reflection>.*?</reflection>", "", text, flags=re.DOTALL | re.IGNORECASE)
-
-        # ── Collapse excessive blank lines ────────────────────────────────────
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = text.strip()
 
-        # ── Detect truncation ────────────────────────────────────────────────
-        # A response is likely truncated when it ends without sentence-closing
-        # punctuation (. ! ?) and without a markdown structural closer (--- or ```)
-        # This catches mid-word and mid-sentence cutoffs.
-        if text and not re.search(r"[.!?)\]`-]\s*$", text):
+        # Detect truncation
+        if text and not re.search(r"[.!?)\]`*-]\s*$", text):
             text += (
                 "\n\n---\n"
                 "⚠️ *The response was cut off before completion. "
@@ -1127,101 +1300,122 @@ RULE 6 - NO THINKING OUT LOUD
 
         return text
 
-    def _call(self, prompt: str) -> str:
+    def _call(self, prompt: str, system: str="") -> Generator[str, None, None]:
         try:
             r = requests.post(
                 f"{AppConfig.OLLAMA_BASE_URL}/api/generate",
                 json={
-                    "model":  AppConfig.LLM_MODEL,
+                    "model":  AppConfig.LLM_MODEL, 
                     "prompt": prompt,
-                    "stream": False,
+                    "system": system,
+                    "stream": True,
                     "options": {
                         "temperature": AppConfig.LLM_TEMPERATURE,
                         "top_p":       AppConfig.LLM_TOP_P,
                         "top_k":       AppConfig.LLM_TOP_K,
                         "num_predict": AppConfig.LLM_MAX_TOKENS,
-                        "stop":        ["USER QUESTION:", "CONTEXT FROM"],
+                        "num_ctx":     AppConfig.LLM_NUM_CTX,
+                        "repeat_penalty": 1.0,
+                        "stop":        ["<<USER_QUESTION>>", "<<CONTEXT_BLOCK>>"],
                     },
                 },
-                timeout=AppConfig.LLM_TIMEOUT,
+                timeout=(AppConfig.LLM_TIMEOUT, AppConfig.LLM_TIMEOUT),
+                stream=True,
             )
-            if r.status_code == 200:
-                return r.json().get("response", "").strip()
-            return f"❌ LLM returned HTTP {r.status_code}."
+            if r.status_code != 200:
+                yield f"❌ LLM returned HTTP {r.status_code}."
+                return
+            for line in r.iter_lines():
+                if line:
+                    chunk = json.loads(line)
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+                    if chunk.get("done"):
+                        break
         except requests.Timeout:
-            return "❌ The model took too long. Try a shorter or simpler question."
+            yield "❌ The model took too long. Try a shorter or simpler question."
         except requests.ConnectionError:
-            return "❌ Cannot reach Ollama. Run 'ollama serve' in your terminal."
+            yield "❌ Cannot reach Ollama. Run 'ollama serve' in your terminal."
         except Exception as exc:
             logger.error("LLM error: %s", exc, exc_info=True)
-            return f"❌ Unexpected error: {exc}"
+            yield f"❌ Unexpected error: {exc}"
+
 
 # =============================================================================
 # CACHE PRE-BUILDER  (runs on app startup)
 # =============================================================================
 
 class CacheBuilder:
-    """Smart cache builder - shows progress only if needed."""
-    
+    """Smart cache builder — shows progress only if needed."""
+
     @staticmethod
     def ensure_indexes_ready(kb: KnowledgeBase, registry: SourceRegistry) -> bool:
         """
-        Check if all indexes are ready. If not, build them with progress UI.
-        Returns True when ready.
+        Check if all indexes are ready. Build them with a progress UI if not.
+
+        BUG FIX: replaced walrus-operator-in-generator with explicit loop so
+        errors during build are properly caught and reported per-source.
         """
         enabled_sources = registry.all_enabled()
-        
-        # Check if all ready
-        all_ready = all(
-            (idx := kb.get_or_build(s)) and idx.is_ready()
-            for s in enabled_sources
-        )
-        
-        if all_ready:
-            logger.info("✅ All indexes already ready (cached from disk)")
+        if not enabled_sources:
+            logger.warning("No enabled sources found.")
             return True
-        
-        # If not ready, show progress and build
+
+        # Quick check: are all indexes already cached/ready?
+        all_ready = True
+        for src in enabled_sources:
+            if src.key not in kb._indexes or not kb._indexes[src.key].is_ready():
+                cache_path = os.path.join(AppConfig.CACHE_DIR, f"{src.key}_index.pkl")
+                if not os.path.exists(cache_path):
+                    all_ready = False
+                    break
+
+        if all_ready:
+            logger.info("✅ All indexes already cached on disk.")
+            return True
+
         logger.info("🔨 Building indexes (first time or cache cleared)...")
-        
+
         progress_container = st.container()
-        
         with progress_container:
             st.markdown("### ⏳ Initializing Knowledge Base (First Time Only)")
-            st.info("This takes 1-2 minutes on first run, then everything is cached.")
-            
+            st.info("This takes 1–2 minutes on first run, then everything is cached.")
+
             progress_bar = st.progress(0)
-            status_text = st.empty()
-            
+            status_text  = st.empty()
+
             for i, source in enumerate(enabled_sources):
                 progress = (i + 1) / len(enabled_sources)
-                
                 status_text.markdown(f"**Building:** {source.name}")
-                logger.info(f"Building index for {source.name}...")
-                
+                logger.info("Building index for %s...", source.name)
+
                 try:
                     idx = kb.get_or_build(source)
                     if idx and idx.is_ready():
                         status_text.markdown(f"✅ **Done:** {source.name}")
                     else:
-                        status_text.markdown(f"⚠️ **Skipped:** {source.name} (no processed CSV)")
-                except Exception as e:
-                    logger.error(f"Error building {source.key}: {e}")
-                    status_text.markdown(f"❌ **Error:** {source.name}")
-                
-                progress_bar.progress(progress)
-            
-            progress_container.empty()
-            st.success("✅ Knowledge base ready! Refresh to start asking questions.")
-        
-        return True
+                        status_text.markdown(
+                            f"⚠️ **Skipped:** {source.name} (no processed CSV — "
+                            f"run `python preprocess.py --key {source.key}`)"
+                        )
+                except Exception as exc:
+                    logger.error("Error building %s: %s", source.key, exc)
+                    status_text.markdown(f"❌ **Error:** {source.name} — {exc}")
 
+                progress_bar.progress(progress)
+
+            progress_container.empty()
+            st.success("✅ Knowledge base ready!")
+
+        return True
 
 
 # =============================================================================
 # STORAGE SERVICE
 # =============================================================================
 
+_qa_log_lock = threading.Lock()
 
 class StorageService:
     """Thin I/O layer: chat history (JSON) + Q&A log (CSV)."""
@@ -1250,22 +1444,26 @@ class StorageService:
         answer:  str,
         sources: List[str],
         rating:  Optional[int] = None,
+        qa_id:   Optional[str] = None,
     ) -> None:
+
         row = {
+            "qa_id":        qa_id or "",
             "timestamp":    datetime.now().isoformat(),
-            "question":     query[:500],
-            "answer":       answer[:1000],
+            "question":     query,             # BUG FIX: no longer truncated
+            "answer":       answer[:2000],
             "sources_used": ", ".join(sources),
             "user_rating":  rating if rating is not None else "",
         }
         try:
-            new_df = pd.DataFrame([row])
-            if os.path.exists(_QA_LOG_FILE):
-                existing = pd.read_csv(_QA_LOG_FILE)
-                new_df = pd.concat([existing, new_df], ignore_index=True)
-            new_df.to_csv(_QA_LOG_FILE, index=False, encoding="utf-8")
+            with _qa_log_lock:
+                new_df = pd.DataFrame([row])
+                if os.path.exists(_QA_LOG_FILE):
+                    existing = pd.read_csv(_QA_LOG_FILE)
+                    new_df   = pd.concat([existing, new_df], ignore_index=True)
+                new_df.to_csv(_QA_LOG_FILE, index=False, encoding="utf-8")
         except Exception as exc:
-            logger.error("QA log failed: %s", exc)
+            logger.error("Log QA failed: %s", exc)
 
 
 # =============================================================================
@@ -1291,7 +1489,7 @@ def _init_session() -> None:
 
 _init_session()
 
-# ── Singleton services (one instance per server process) ─────────────────────
+# ── Singleton services ────────────────────────────────────────────────────────
 
 
 @st.cache_resource
@@ -1319,6 +1517,16 @@ def _store() -> StorageService:
     return StorageService()
 
 
+@st.cache_resource
+def _feedback_store() -> FeedbackStore:
+    return FeedbackStore()
+
+
+@st.cache_resource
+def _optimizer() -> PromptOptimizer:
+    return PromptOptimizer(_feedback_store())
+
+
 # =============================================================================
 # UTILITIES
 # =============================================================================
@@ -1335,45 +1543,60 @@ def _ollama_ok() -> bool:
         return False
 
 
+def _make_qa_id(query: str, timestamp: str) -> str:
+    """Short deterministic ID for a Q&A exchange."""
+    return hashlib.md5(f"{query}{timestamp}".encode()).hexdigest()[:12]
+
+
 # =============================================================================
 # CSS
 # =============================================================================
 
 _CSS = """
 <style>
-/* ── Variables ──────────────────────────────────────────────────── */
 :root {
-    --primary:   #10a37f;
+    --primary: #10a37f;
     --primary-d: #0d9268;
-    --text:      #0d0d0d;
-    --muted:     #565869;
-    --border:    #e0e0e0;
-    --dark:      #1a1a1a;
-    --dark2:     #242424;
-    --ai-bg:     #f9fdf7;
-    --badge-bg:  #e8f5f0;
-    --badge-tx:  #0d6e53;
-    --warn-bg:   #fff8e1;
+    --text: #0d0d0d;
+    --muted: #565869;
+    --border: #e0e0e0;
+    --dark: #1a1a1a;
+    --ai-bg: #f9fdf7;
+    --badge-bg: #e8f5f0;
+    --badge-tx: #0d6e53;
+    --warn-bg: #fff8e1;
+    --neg-bg: #fff3f3;
 }
 
-/* ── Layout ─────────────────────────────────────────────────────── */
-.block-container { 
-    padding: 18px 36px; 
-    max-width: 960px; 
-    margin: 0 auto; }
+.block-container {
+    padding: 18px 36px;
+    max-width: 960px;
+    margin: 0 auto;
+}
 
-/* ── Header ─────────────────────────────────────────────────────── */
 .hdr {
     text-align: center;
     padding: 22px 0 14px;
     border-bottom: 1px solid var(--border);
     margin-bottom: 20px;
 }
-.hdr h1 { font-size: 2.1rem; font-weight: 700; color: var(--text); margin: 0; }
-.hdr p  { font-size: 0.88rem; color: var(--muted); margin-top: 6px; }
+.hdr h1 {
+    font-size: 2.1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0;
+}
+.hdr p {
+    font-size: 0.88rem;
+    color: var(--muted);
+    margin-top: 6px;
+}
 
-/* ── Chat bubbles ────────────────────────────────────────────────── */
-.mu { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.mu {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
 .mu .b {
     background: var(--primary);
     color: #fff;
@@ -1384,21 +1607,7 @@ _CSS = """
     line-height: 1.5;
     word-wrap: break-word;
 }
-.ma { display: flex; justify-content: flex-start; margin-bottom: 8px; }
-.ma .b {
-    background: var(--ai-bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 14px 14px 14px 4px;
-    padding: 10px 15px;
-    max-width: 72%;
-    font-size: 0.93rem;
-    line-height: 1.6;
-    word-wrap: break-word;
-    white-space: pre-wrap;
-}
 
-/* ── Source / category badges ────────────────────────────────────── */
 .badge {
     display: inline-block;
     font-size: 0.7rem;
@@ -1410,18 +1619,28 @@ _CSS = """
     margin: 2px 2px 0 0;
 }
 
-/* ── Status indicators ───────────────────────────────────────────── */
-.dot-ready   { color: #2ecc71; }
-.dot-cached  { color: #f39c12; }
-.dot-missing { color: #e74c3c; }
+.patch-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 600;
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    padding: 2px 7px;
+    margin: 2px 2px 0 0;
+}
 
-/* ── Welcome screen ──────────────────────────────────────────────── */
 .welcome {
     text-align: center;
     padding: 52px 20px;
     color: var(--muted);
 }
-.welcome h2 { color: #444; font-size: 1.5rem; margin-bottom: 10px; }
+.welcome h2 {
+    color: #444;
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+}
 .welcome .eg {
     font-size: 0.87rem;
     color: #888;
@@ -1430,19 +1649,25 @@ _CSS = """
     line-height: 1.8;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
     background: var(--dark);
     border-right: 1px solid #2e2e2e;
 }
-[data-testid="stSidebar"] * { color: #ccc !important; }
+[data-testid="stSidebar"] * {
+    color: #ccc !important;
+}
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] strong,
-[data-testid="stSidebar"] b { color: #fff !important; }
-[data-testid="stSidebar"] .stCheckbox label { font-size: 0.82rem !important; }
-[data-testid="stSidebar"] .stExpander summary { font-size: 0.88rem !important; }
+[data-testid="stSidebar"] b {
+    color: #fff !important;
+}
+[data-testid="stSidebar"] .stCheckbox label {
+    font-size: 0.82rem !important;
+}
+[data-testid="stSidebar"] .stExpander summary {
+    font-size: 0.88rem !important;
+}
 
-/* ── Preprocess warning ──────────────────────────────────────────── */
 .preprocess-warn {
     background: var(--warn-bg);
     border: 1px solid #ffe082;
@@ -1453,13 +1678,17 @@ _CSS = """
     margin: 6px 0;
 }
 
-@media (max-width: 768px) {
-    .block-container { padding: 12px 14px; }
-    .mu .b, .ma .b   { max-width: 90%; }
+.fb-submitted {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    color: #166534;
+    margin-top: 6px;
 }
 </style>
 """
-
 
 # =============================================================================
 # UI  -  SIDEBAR
@@ -1505,9 +1734,14 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
 
         st.divider()
 
+        # ── Feedback Analytics ─────────────────────────────────────────────
+        _sidebar_feedback_analytics()
+
+        st.divider()
+
         # ── Category filter ────────────────────────────────────────────────
         st.markdown("**🗂️ Category Filter**")
-        all_cats = st.checkbox("All categories", value=True, key="cat_all")
+        all_cats  = st.checkbox("All categories", value=True, key="cat_all")
         cat_filter: Optional[List[str]] = None
 
         if not all_cats:
@@ -1532,10 +1766,10 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
         unprocessed:   List[str] = []
 
         status_icons = {
-            "ready":           ("🟢", "Index in memory"),
-            "cached":          ("🟡", "Index cached on disk"),
-            "not_indexed":     ("🔵", "Processed, not yet indexed (will index on first query)"),
-            "needs_preprocess":("🔴", "Run: python preprocess.py --key <key>"),
+            "ready":            ("🟢", "Index in memory"),
+            "cached":           ("🟡", "Index cached on disk"),
+            "not_indexed":      ("🔵", "Processed, not yet indexed (will index on first query)"),
+            "needs_preprocess": ("🔴", "Run: python preprocess.py --key <key>"),
         }
 
         for cat in CATEGORIES:
@@ -1553,8 +1787,7 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
 
                 for src in srcs:
                     s_icon, s_tip = status_icons.get(
-                        idx_status.get(src.key, "needs_preprocess"),
-                        ("❓", ""),
+                        idx_status.get(src.key, "needs_preprocess"), ("❓", ""),
                     )
                     tag = "PDF" if src.type == "pdf" else "CSV"
 
@@ -1610,9 +1843,9 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
             if st.button("♻️ Rebuild selected index", use_container_width=True):
                 if pick != "— choose —":
                     with st.spinner(f"Rebuilding {pick} …"):
-                        ok = kb.rebuild_one(options[pick])
-                    (st.success if ok else st.error)(
-                        f"{'✅ Done' if ok else '❌ Failed'}: {pick}"
+                        ok2 = kb.rebuild_one(options[pick])
+                    (st.success if ok2 else st.error)(
+                        f"{'✅ Done' if ok2 else '❌ Failed'}: {pick}"
                     )
 
             st.markdown("---")
@@ -1631,8 +1864,8 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
 
         # ── External links ─────────────────────────────────────────────────
         c1, c2 = st.columns(2)
-        c1.link_button("SSM Portal", "https://www.ssm.com.my",       use_container_width=True)
-        c2.link_button("MyCoID",     "https://www.mycoid.com.my",     use_container_width=True)
+        c1.link_button("SSM Portal", "https://www.ssm.com.my",   use_container_width=True)
+        c2.link_button("MyCoID",     "https://www.mycoid.com.my", use_container_width=True)
 
         # ── Recent questions ───────────────────────────────────────────────
         recent = st.session_state.get("chat_history", [])[-8:]
@@ -1648,6 +1881,63 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
         st.caption("⚠️ Always consult a licensed professional for legal matters.")
 
     return ok, selected_keys, cat_filter
+
+
+def _sidebar_feedback_analytics() -> None:
+    """Analytics panel showing feedback stats and active prompt patches."""
+    fb_store  = _feedback_store()
+    optimizer = _optimizer()
+    summary   = fb_store.summary()
+
+    with st.expander("📊 Feedback Analytics", expanded=False):
+        t = summary["total"]
+        if t == 0:
+            st.caption("No feedback collected yet.")
+        else:
+            # Rating summary
+            col1, col2, col3 = st.columns(3)
+            col1.metric("👍 Helpful",   summary["positive"])
+            col2.metric("😐 Okay",      summary["neutral"])
+            col3.metric("👎 Negative",  summary["negative"])
+
+            # Satisfaction rate
+            if t > 0:
+                rate = round((summary["positive"] / t) * 100)
+                st.progress(rate / 100, f"Satisfaction: {rate}%")
+
+            # Failure breakdown
+            neg = summary["negative"]
+            if neg > 0:
+                st.markdown("**Failure breakdown** (negative responses):")
+                fc = summary["failure_counts"]
+                for key, label in FeedbackStore.FAILURE_TYPES.items():
+                    count = fc.get(key, 0)
+                    if count > 0:
+                        pct = int(count / neg * 100)
+                        st.markdown(f"  {label}: **{count}** ({pct}%)")
+
+        # Active prompt patches
+        patches = optimizer.active_patch_names()
+        if patches:
+            st.markdown("**🔧 Active prompt patches:**")
+            for p in patches:
+                st.markdown(
+                    f'<span class="patch-badge">⚡ {p}</span>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No prompt patches active.")
+
+        # Download feedback log
+        if summary["total"] > 0:
+            fb_json = json.dumps(summary["records"], indent=2, ensure_ascii=False)
+            st.download_button(
+                "📥 Export feedback log",
+                data=fb_json,
+                file_name=f"chatssm_feedback_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
 
 
 # =============================================================================
@@ -1689,21 +1979,12 @@ def _render_messages() -> None:
         return
 
     for msg in history:
-        # ── User bubble (right-aligned, green) — pure HTML ───────────────────
         st.markdown(
-            f'<div class="mu"><div class="b">{msg["query"]}</div></div>',
+            f'<div class="mu"><div class="b">{html.escape(msg.get("query", ""))}</div></div>',
             unsafe_allow_html=True,
         )
-
-        # ── Assistant response — use st.chat_message so markdown renders ─────
-        # We cannot use st.markdown() inside the custom <div class="ma"> because
-        # Streamlit does not parse markdown inside raw HTML strings passed to
-        # unsafe_allow_html. Instead we use st.chat_message which natively
-        # renders **bold**, bullet lists, numbered lists, and code blocks.
         with st.chat_message("assistant", avatar="⚖️"):
-            st.markdown(msg["response"])
-
-            # Category badges below the response
+            st.markdown(msg.get("response", "*(no response recorded)*"))
             cats = msg.get("categories_hit", [])
             if cats:
                 badge_html = " ".join(
@@ -1711,48 +1992,131 @@ def _render_messages() -> None:
                 )
                 st.markdown(badge_html, unsafe_allow_html=True)
 
-def _auto_scroll_to_latest() -> None:
-    """Auto-scroll to latest message when new response arrives."""
-    
-    history = st.session_state.get("chat_history", [])
-    if not history:
-        return
-    
-    # Track message count to know when new messages arrive
-    if "last_message_count" not in st.session_state:
-        st.session_state["last_message_count"] = 0
-    
-    current_count = len(history)
-    
-    # Only scroll if messages were just added
-    if current_count > st.session_state["last_message_count"]:
-        st.session_state["last_message_count"] = current_count
-        
-        # Scroll to bottom with JavaScript
-        scroll_js = """
-        <script>
-            // Scroll to bottom after a tiny delay (let content render first)
-            setTimeout(function() {
-                window.scrollTo(0, document.body.scrollHeight);
-            }, 100);
-        </script>
-        """
-        st.markdown(scroll_js, unsafe_allow_html=True)
 
 def _render_feedback(latest: Dict) -> None:
-    store = _store()
-    with st.expander("📋 Feedback & Export", expanded=False):
-        c1, c2, c3 = st.columns(3)
-        if c1.button("👍 Helpful",    use_container_width=True):
-            store.log_qa(latest["query"], latest["response"], latest.get("citations", []), 5)
-            st.success("Thanks!")
-        if c2.button("😐 Okay",       use_container_width=True):
-            store.log_qa(latest["query"], latest["response"], latest.get("citations", []), 3)
-            st.info("Noted.")
-        if c3.button("👎 Needs work", use_container_width=True):
-            store.log_qa(latest["query"], latest["response"], latest.get("citations", []), 1)
-            st.warning("We'll improve.")
+    """
+    Render the feedback panel for the most recent Q&A exchange.
 
+    Features:
+    - 👍 / 😐 / 👎 quick rating buttons
+    - On 👎: shows failure-type dropdown + optional comment box
+    - Double-submit guard via session state key per qa_id
+    - Download button for the response text
+    """
+    fb_store = _feedback_store()
+    store    = _store()
+
+    qa_id     = latest.get("qa_id", "unknown")
+    submitted_key = f"fb_submitted_{qa_id}"
+    pending_key   = f"fb_pending_{qa_id}"
+
+    with st.expander("📋 Rate this response & Export", expanded=False):
+
+        # ── Already submitted guard ────────────────────────────────────────
+        if st.session_state.get(submitted_key):
+            st.markdown(
+                '<div class="fb-submitted">✅ Feedback submitted — thank you!</div>',
+                unsafe_allow_html=True,
+            )
+        elif st.session_state.get(pending_key) == "negative_form":
+            # ── Negative feedback form ─────────────────────────────────────
+            st.markdown("**What went wrong?** *(optional details help improve the system)*")
+
+            failure_label = st.selectbox(
+                "Failure type",
+                options=list(FeedbackStore.FAILURE_TYPES.values()),
+                key=f"fb_ft_{qa_id}",
+            )
+            # Map label back to key
+            failure_key = next(
+                k for k, v in FeedbackStore.FAILURE_TYPES.items()
+                if v == failure_label
+            )
+
+            comment = st.text_area(
+                "Additional details (optional)",
+                placeholder="e.g. 'Section 17 was cited but the answer quoted Section 18'",
+                key=f"fb_comment_{qa_id}",
+                max_chars=3000,
+            )
+
+            col_sub, col_skip = st.columns(2)
+            if col_sub.button("📤 Submit feedback", use_container_width=True, key=f"fb_sub_{qa_id}"):
+                fb_store.save(
+                    qa_id        = qa_id,
+                    query        = latest.get("query", ""),
+                    response     = latest.get("response", ""),
+                    citations    = latest.get("citations", []),
+                    rating       = 1,
+                    failure_type = failure_key,
+                    comment      = comment,
+                )
+                store.log_qa(
+                    latest.get("query", ""), latest.get("response", ""),
+                    latest.get("citations", []), 1, qa_id,
+                )
+                st.session_state[submitted_key] = True
+                st.session_state.pop(pending_key, None)
+                st.rerun()
+
+            if col_skip.button("⏭ Skip details", use_container_width=True, key=f"fb_skip_{qa_id}"):
+                fb_store.save(
+                    qa_id     = qa_id,
+                    query     = latest.get("query", ""),
+                    response  = latest.get("response", ""),
+                    citations = latest.get("citations", []),
+                    rating    = 1,
+                )
+                store.log_qa(
+                    latest.get("query", ""), latest.get("response", ""),
+                    latest.get("citations", []), 1, qa_id,
+                )
+                st.session_state[submitted_key] = True
+                st.session_state.pop(pending_key, None)
+                st.rerun()
+
+        else:
+            # ── Initial rating buttons ─────────────────────────────────────
+            st.markdown("**Was this response helpful?**")
+            c1, c2, c3 = st.columns(3)
+
+            if c1.button("👍 Helpful", use_container_width=True, key=f"fb_pos_{qa_id}"):
+                fb_store.save(
+                    qa_id     = qa_id,
+                    query     = latest.get("query", ""),
+                    response  = latest.get("response", ""),
+                    citations = latest.get("citations", []),
+                    rating    = 5,
+                )
+                store.log_qa(
+                    latest.get("query", ""), latest.get("response", ""),
+                    latest.get("citations", []), 5, qa_id,
+                )
+                st.session_state[submitted_key] = True
+                st.rerun()
+
+            if c2.button("😐 Okay", use_container_width=True, key=f"fb_neu_{qa_id}"):
+                fb_store.save(
+                    qa_id     = qa_id,
+                    query     = latest.get("query", ""),
+                    response  = latest.get("response", ""),
+                    citations = latest.get("citations", []),
+                    rating    = 3,
+                )
+                store.log_qa(
+                    latest.get("query", ""), latest.get("response", ""),
+                    latest.get("citations", []), 3, qa_id,
+                )
+                st.session_state[submitted_key] = True
+                st.rerun()
+
+            if c3.button("👎 Needs work", use_container_width=True, key=f"fb_neg_{qa_id}"):
+                # Don't submit yet — open the detail form
+                st.session_state[pending_key] = "negative_form"
+                st.rerun()
+
+        # ── Download ───────────────────────────────────────────────────────
+        st.markdown("---")
         cits = ", ".join(latest.get("citations", []))
         cats = ", ".join(latest.get("categories_hit", []))
         export = (
@@ -1788,77 +2152,99 @@ def main() -> None:
         )
         st.stop()
 
-    # Ensure indexes are ready before serving queries
-    kb = _kb()
+    kb  = _kb()
     reg = _reg()
     if not CacheBuilder.ensure_indexes_ready(kb, reg):
         st.warning("Could not initialize knowledge base. Please check logs.")
         st.stop()
 
-    # Load persisted history once per session
     if not st.session_state["chat_history"]:
         st.session_state["chat_history"] = _store().load_history()
 
     _render_messages()
 
-    _auto_scroll_to_latest()
+    # Auto-scroll
+    st.markdown(
+        "<script>setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),500);</script>",
+        unsafe_allow_html=True,
+    )
 
-    # ── Input row ──────────────────────────────────────────────────────────
-    col_txt, col_btn = st.columns([0.85, 0.15], gap="small")
-    with col_txt:
-        user_input: str = st.text_area(
-            "Message",
-            placeholder=(
-                "Ask about legislation, practice notes, guidelines, circulars, FAQ, or forms …"
-            ),
-            height=60,
-            label_visibility="collapsed",
-            key="user_input",
-        )
-    with col_btn:
-        send = st.button("Send ➤", use_container_width=True, type="primary")
+    prefill_val = st.session_state.pop("prefill", "")
+    user_input = st.chat_input(
+        "Ask about legislation, practice notes, guidelines, circulars, FAQ, or forms…",
+        key="chat_input",
+    ) or prefill_val
 
-    # ── Handle submission ──────────────────────────────────────────────────
-    if send and user_input.strip():
+    if user_input and user_input.strip():
         if not selected_keys:
             st.warning(
                 "No active knowledge sources. "
-                "Select at least one source in the sidebar, "
-                "or run **python preprocess.py** to prepare unprocessed sources."
+                "Select at least one source in the sidebar."
             )
             st.stop()
 
         kb    = _kb()
         llm   = _llm()
         store = _store()
+        opt   = _optimizer()
 
-        with st.spinner("Searching SSM documents …"):
-            prog = st.progress(0, "Embedding query …")
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        with st.spinner(""):
             result = kb.search(
-                query=user_input,
-                selected_keys=selected_keys,
-                cat_filter=cat_filter,
+                query         = user_input,
+                selected_keys = selected_keys,
+                cat_filter    = cat_filter,
             )
-            prog.progress(55, "Generating grounded answer …")
-            response = llm.generate(
-                user_input, 
-                result["chunks"],
-                citations=result["citations"]  # Pass source names
-            )
-            prog.progress(100, "Done.")
+            patches  = opt.get_patches()
 
-        record: Dict = {
+        with st.chat_message("assistant", avatar="⚖️"):
+            if not result["chunks"]:
+                response = (
+                    "No relevant sections were found in the selected knowledge sources. "
+                    "Please rephrase your question, enable more sources, or consult a "
+                    "licensed professional."
+                )
+                st.markdown(response)
+            else:
+                system = llm._SYSTEM_BASE
+                if patches:
+                    system += f"\n{patches}\n"
+                act_hint = (
+                    f"\nNOTE: This query relates to the {result.get('detected_act')}. "
+                    f"Prioritize chunks from that Act when constructing your answer.\n"
+                ) if result.get("detected_act") else ""
+                context_parts = []
+                for i, chunk in enumerate(result["chunks"]):
+                    src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
+                    safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS] if len(chunk) > AppConfig.MAX_CHUNK_CHARS else chunk
+                    context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
+                context_block = "\n\n".join(context_parts)
+                prompt = (
+                    f"<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
+                    f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
+                )
+                response = st.write_stream(llm._call(prompt, system=system))
+                response = llm._postprocess(response)
+
+        timestamp = datetime.now().isoformat()
+        qa_id     = _make_qa_id(user_input, timestamp)
+
+        record = {
+            "qa_id":          qa_id,
             "query":          user_input,
             "response":       response,
-            "citations":      result["citations"],
-            "categories_hit": result["categories_hit"],
-            "timestamp":      datetime.now().isoformat(),
+            "citations":      result.get("citations", []),
+            "categories_hit": result.get("categories_hit", []),
+            "timestamp":      timestamp,
         }
         st.session_state["chat_history"].append(record)
         store.save_history(st.session_state["chat_history"])
         st.rerun()
 
-    # ── Feedback panel ─────────────────────────────────────────────────────
+    # Feedback panel for most recent exchange
     if st.session_state["chat_history"]:
         _render_feedback(st.session_state["chat_history"][-1])
 
