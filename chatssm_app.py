@@ -2284,7 +2284,7 @@ def main() -> None:
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        with st.spinner(""):
+        with st.spinner("_Thinking..._"):
             result = kb.search(
                 query         = user_input,
                 selected_keys = selected_keys,
@@ -2298,44 +2298,80 @@ def main() -> None:
                     "licensed professional."
                 )
 
-        with st.chat_message("assistant", avatar="⚖️"):
-            if not result["chunks"]:
+        if not result["chunks"]:
+            with st.chat_message("assistant", avatar="⚖️"):
                 st.markdown(response)
-            else:
-                system = llm._SYSTEM_BASE
-                if patches:
-                    system += f"\n{patches}\n"
-                act_hint = (
-                    f"\nNOTE: This query relates to the {result.get('detected_act')}. "
-                    f"Prioritize chunks from that Act when constructing your answer.\n"
-                ) if result.get("detected_act") else ""
-                context_parts = []
-                for i, chunk in enumerate(result["chunks"]):
-                    src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
-                    safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS] if len(chunk) > AppConfig.MAX_CHUNK_CHARS else chunk
-                    context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
-                context_block = "\n\n".join(context_parts)
-                prompt = (
-                    f"/no_think\n<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
-                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
-                    f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
-                )
+
+        else:
+            system = llm._SYSTEM_BASE
+            if patches:
+                system += f"\n{patches}\n"
+            act_hint = (
+                f"\nNOTE: This query relates to the {result.get('detected_act')}. "
+                f"Prioritize chunks from that Act when constructing your answer.\n"
+            ) if result.get("detected_act") else ""
+            context_parts = []
+            for i, chunk in enumerate(result["chunks"]):
+                src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
+                safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS] if len(chunk) > AppConfig.MAX_CHUNK_CHARS else chunk
+                context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
+            context_block = "\n\n".join(context_parts)
+            prompt = (
+                f"/no_think\n<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
+                f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
+            )
+
+            def _stream_with_retry(p: str, s: str):
+                """Run one LLM call; return (generator, first_token_or_None)."""
+                gen   = llm._call(p, s)
+                first = next(gen, None)   # blocks here — spinner shows during this wait
+                return gen, first
+            
+            raw_tokens  = []
+
+            with st.spinner("_Generating response..._"):
                 try:
-                    response_placeholder = st.empty()
-                    accumulated = ""
-                    for token in llm._call(prompt, system=system):
-                        accumulated += token
-                        response_placeholder.markdown(accumulated + "▌")   # live typewriter effect
-                    response = llm._postprocess(accumulated)
-                    response_placeholder.markdown(response)
-                    if len(response.strip()) < 30 and not response.startswith("❌"):
-                        logger.warning("LLM returned near-empty response; retrying once.")
-                        response_list = list(llm._call(prompt, system=system))
-                        response = llm._postprocess("".join(response_list))
-                        response_placeholder.markdown(response)
+                    gen, first_token = _stream_with_retry(prompt, system)
                 except Exception as exc:
-                    response = f"❌ Unexpected error during generation: {exc}"
-                    st.markdown(response)
+                    gen, first_token = iter([]), f"❌ Error during generation: {exc}"
+                    logger.error("LLM call failed before first token: %s", exc, exc_info=True)
+
+            with st.chat_message("assistant", avatar="⚖️"):
+                stream_box = st.empty()
+                try:
+                    if first_token:
+                        raw_tokens.append(first_token)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+
+                    for token in gen:
+                        raw_tokens.append(token)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+
+                except Exception as exc:
+                    raw_tokens.append(f"\n\n❌ Error during streaming: {exc}")
+                    logger.error("Streaming error in main(): %s", exc, exc_info=True)
+
+                raw = "".join(raw_tokens)
+
+                if len(raw.strip()) < 30 and not raw.startswith("❌"):
+                    logger.warning("LLM returned near-empty response; retrying once.")
+                    stream_box.markdown("_Response was too short, retrying once..._")
+                    raw_tokens = []
+
+                    with st.spinner("_Retrying generation..._"):
+                        gen2, first2 = _stream_with_retry(prompt, system)
+                    stream_box.empty()
+                    if first2:
+                        raw_tokens.append(first2)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+                    for token in gen2:
+                        raw_tokens.append(token)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+                    raw = "".join(raw_tokens)
+
+                response = llm._postprocess(raw)
+                stream_box.markdown(response)  # Finalize the response display (remove the "▌" cursor)
 
         timestamp = datetime.now().isoformat()
         qa_id     = _make_qa_id(user_input, timestamp)
@@ -2355,7 +2391,6 @@ def main() -> None:
     # Feedback panel for most recent exchange
     if st.session_state["chat_history"]:
         _render_feedback(st.session_state["chat_history"][-1])
-
 
 if __name__ == "__main__":
     main()
