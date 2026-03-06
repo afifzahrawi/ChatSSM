@@ -10,8 +10,9 @@ Prerequisites
   2. Install deps:   pip install -r requirements.txt
   3. Pre-process:    python preprocess.py
   4. Run Ollama:     ollama serve
-  5. Pull models:    ollama pull qwen3-embedding:latest
-                     ollama pull deepseek-r1:8b
+  5. Pull models:    ollama pull qwen3-embedding:8b
+                     ollama pull qwen3:8b
+                     ollama pull glm-ocr
   6. Start app:      streamlit run chatssm_app.py
 
 Architecture
@@ -36,17 +37,19 @@ import os
 import pickle
 import re
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
+from filelock import FileLock
 
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 import html
+import tempfile, shutil
+import csv
 
 from chunk import Chunk, SearchResult
 
@@ -93,13 +96,13 @@ CATEGORY_ICONS: Dict[str, str] = {
 class AppConfig:
     # ── Ollama ────────────────────────────────────────────────────────────────
     OLLAMA_BASE_URL: str   = "http://localhost:11434"
-    EMBEDDING_MODEL: str   = "qwen3-embedding:latest"
-    LLM_MODEL:       str   = "deepseek-r1:8b"
+    EMBEDDING_MODEL: str   = "qwen3-embedding:8b"
+    LLM_MODEL:       str   = "qwen3:8b"
 
     # ── LLM sampling (deterministic = no hallucination drift) ─────────────────
     LLM_TEMPERATURE: float = 0.0
-    LLM_TOP_P:       float = 0.1
-    LLM_TOP_K:       int   = 10
+    LLM_TOP_P:       float = 0.9
+    LLM_TOP_K:       int   = 20
     LLM_MAX_TOKENS:  int   = 1200
     LLM_TIMEOUT:     int   = 300    # seconds
     LLM_NUM_CTX: int = 6144   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
@@ -123,7 +126,10 @@ class AppConfig:
     @classmethod
     def ensure_dirs(cls) -> None:
         for d in [cls.SOURCES_DIR, cls.PROCESSED_DIR, cls.CACHE_DIR, cls.DATA_DIR]:
-            os.makedirs(d, exist_ok=True)
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as exc:
+                logger.warning("Could not create directory '%s': %s", d, exc)
 
 
 AppConfig.ensure_dirs()
@@ -223,6 +229,11 @@ class SourceRegistry:
                     fpath = os.path.join(dt_path, fname)
                     key   = _filename_to_key(fname)
                     if key in discovered:
+                        logger.warning(
+                            "KEY COLLISION: '%s' and '%s' both map to key '%s'. "
+                            "Second file will not be processed. Rename one to resolve.",
+                            discovered[key].local_path, fpath, key
+                        )
                         continue
                     discovered[key] = SourceEntry(
                         key        = key,
@@ -328,10 +339,12 @@ class SourceRegistry:
 
 
 def _bump(hit: bool) -> None:
-    s = st.session_state.get("cache_stats", {"hits": 0, "misses": 0})
-    s["hits" if hit else "misses"] += 1
-    st.session_state["cache_stats"] = s
-
+    try:
+        s = st.session_state.get("cache_stats", {"hits": 0, "misses": 0})
+        s["hits" if hit else "misses"] += 1
+        st.session_state["cache_stats"] = s
+    except Exception:
+        pass 
 
 class EmbeddingService:
     """
@@ -459,7 +472,12 @@ class EmbeddingService:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_fetch, item): item[0] for item in to_fetch.items()}
             for future in as_completed(futures):
-                idx, vec = future.result()
+                try:
+                    idx, vec = future.result()
+                except Exception as exc:
+                    logger.error("Embedding worker failed: %s", exc)
+                    idx = futures[future]
+                    vec = None
                 results[idx] = vec
                 misses += 1
                 completed += 1
@@ -511,11 +529,41 @@ class EmbeddingService:
                 if emb is None:
                     logger.warning("Ollama returned HTTP 200 but no 'embedding' key. Model may not be loaded.")
                 return emb
-            logger.warning("Embeddings API returned HTTP %s.", r.status_code)
+            
+            status = r.status_code
+            if status == 404:
+                logger.error(
+                    "Embedding model '%s' not found (HTTP 404). "
+                    "Fix: ollama pull %s",
+                    AppConfig.EMBEDDING_MODEL, AppConfig.EMBEDDING_MODEL,
+                )
+            elif status == 429:
+                logger.warning(
+                    "Ollama rate-limited (HTTP 429). "
+                    "Fix: reduce EMBEDDING_WORKERS in AppConfig (currently %d).",
+                    AppConfig.EMBEDDING_WORKERS,
+                )
+            elif status == 503:
+                logger.warning(
+                    "Ollama unavailable (HTTP 503) — model may still be loading. "
+                    "Fix: wait and retry, or check 'ollama ps'.",
+                )
+            else:
+                logger.warning(
+                    "Embeddings API returned HTTP %s. Response: %s",
+                    status, r.text[:300],
+                )
         except requests.ConnectionError:
-            logger.error("Cannot reach Ollama. Is 'ollama serve' running?")
+            logger.error(
+                "Cannot reach Ollama at %s. Is 'ollama serve' running?",
+                AppConfig.OLLAMA_BASE_URL,
+            )
         except requests.Timeout:
-            logger.error("Embedding request timed out (text length: %d).", len(text))
+            logger.error(
+                "Embedding request timed out after %ds (text length: %d chars). "
+                "Fix: increase EMBEDDING_TIMEOUT or shorten chunks.",
+                AppConfig.EMBEDDING_TIMEOUT, len(text),
+            )
         except Exception as exc:
             logger.error("Embedding error: %s", exc)
         return None
@@ -541,12 +589,22 @@ class EmbeddingService:
     def _save_disk(self) -> None:
         """Thread-safe disk flush. Called once after a batch, not per-embedding."""
         with self._disk_lock:
-            try:
-                with open(_EMBEDDING_CACHE, "wb") as fh:
-                    os.chmod(_EMBEDDING_CACHE, 0o600) 
-                    pickle.dump(self._disk, fh)
-            except Exception as exc:
-                logger.warning("Disk cache save failed: %s", exc)
+            dir_ = os.path.dirname(_EMBEDDING_CACHE)
+            with tempfile.NamedTemporaryFile("wb", dir=dir_, delete=False) as tmp:
+                tmp_path = tmp.name
+                try:
+                    pickle.dump(self._disk, tmp)
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError:
+                        pass
+                    shutil.move(tmp_path, _EMBEDDING_CACHE)
+                except Exception as exc:
+                    logger.warning("Disk cache save failed: %s", exc)
+                    try:
+                        os.unlink(tmp_path)   # clean up orphan
+                    except Exception:
+                        pass
 
 
 # =============================================================================
@@ -651,9 +709,11 @@ class DocumentIndex:
 
     def save(self) -> None:
         try:
-            with open(self._cache_path, "wb") as fh:
-                pickle.dump({"chunks": self._chunks, "matrix": self._matrix}, fh)
-            os.chmod(self._cache_path, 0o600)
+            tmp = self._cache_path + ".tmp"
+            with open(tmp, "wb") as fh:
+                pickle.dump({"version": 3, "chunks": self._chunks, "matrix": self._matrix}, fh)
+            os.chmod(tmp, 0o600)
+            shutil.move(tmp, self._cache_path)
             logger.info("Saved index '%s'.", self._key)
         except Exception as exc:
             logger.warning("Could not save index '%s': %s", self._key, exc)
@@ -664,8 +724,20 @@ class DocumentIndex:
         try:
             with open(self._cache_path, "rb") as fh:
                 payload = pickle.load(fh)
+            if payload.get("version") != 3:
+                logger.warning("Index '%s' version mismatch. Rebuilding.", self._key)
+                self.delete_cache()
+                return False
             self._chunks = payload["chunks"]
             self._matrix = payload["matrix"]
+            if self._matrix is None or len(self._chunks) != self._matrix.shape[0]:
+                logger.error(
+                    "Index '%s' corrupted: %d chunks vs %d matrix rows. Deleting.",
+                    self._key, len(self._chunks), 
+                    self._matrix.shape[0] if self._matrix is not None else 0
+                )
+                self.delete_cache()
+                return False
             logger.info("Loaded index '%s': %d chunks.", self._key, len(self._chunks))
             return True
         except Exception as exc:
@@ -728,40 +800,44 @@ class KnowledgeBase:
         self._registry = registry
         self._emb      = emb
         self._indexes: Dict[str, DocumentIndex] = {}
+        self._build_locks: Dict[str, threading.Lock] = {}
 
     # ── Index lifecycle ───────────────────────────────────────────────────────
 
-    def get_or_build(self, source: SourceEntry) -> Optional[DocumentIndex]:
+
+    def get_or_build(self, source):
         """Return a ready index, building it if needed."""
-        if source.key in self._indexes and self._indexes[source.key].is_ready():
-            return self._indexes[source.key]
+        lock = self._build_locks.setdefault(source.key, threading.Lock())
+        with lock:
+            if source.key in self._indexes and self._indexes[source.key].is_ready():
+                return self._indexes[source.key]
 
-        idx = DocumentIndex(source.key, source.name, source.category, self._emb, self._registry)
+            idx = DocumentIndex(source.key, source.name, source.category, self._emb, self._registry)
 
-        if idx.load():
-            self._indexes[source.key] = idx
-            return idx
+            if idx.load():
+                self._indexes[source.key] = idx
+                return idx
 
-        if not source.is_ready:
-            logger.warning(
-                "Source '%s' has no processed CSV. Run:  python preprocess.py --key %s",
-                source.key, source.key,
-            )
+            if not source.is_ready:
+                logger.warning(
+                    "Source '%s' has no processed CSV. Run:  python preprocess.py --key %s",
+                    source.key, source.key,
+                )
+                return None
+
+            try:
+                df = pd.read_csv(source.processed_csv, encoding="utf-8")
+            except Exception as exc:
+                logger.error("Cannot read processed CSV for '%s': %s", source.key, exc)
+                return None
+
+            ok = idx.build(df)
+            if ok:
+                idx.save()
+                self._indexes[source.key] = idx
+                return idx
+
             return None
-
-        try:
-            df = pd.read_csv(source.processed_csv, encoding="utf-8")
-        except Exception as exc:
-            logger.error("Cannot read processed CSV for '%s': %s", source.key, exc)
-            return None
-
-        ok = idx.build(df)
-        if ok:
-            idx.save()
-            self._indexes[source.key] = idx
-            return idx
-
-        return None
 
     def rebuild_one(self, key: str) -> bool:
         """Force-rebuild a single index (deletes disk cache first)."""
@@ -835,7 +911,10 @@ class KnowledgeBase:
         best_act: Optional[str] = None
         best_count = 0
         for act, keywords in act_keywords.items():
-            matches = sum(1 for kw in keywords if kw in query_lower)
+            def _word_match(kw: str, text: str) -> bool:
+                return bool(re.search(r'\b' + re.escape(kw) + r'\b', text))
+            
+            matches = sum(1 for kw in keywords if _word_match(kw, query_lower))
             if matches >= 2 and matches > best_count:
                 best_act   = act
                 best_count = matches
@@ -873,17 +952,10 @@ class KnowledgeBase:
             if idx is None:
                 continue
 
-            source_relates_to = source.relates_to_acts  # now works correctly
-
-            if detected_act and source.category == "Legislations":
-                # For main Acts, SKIP if wrong act
-                source_relates_to = getattr(source, 'relates_to_acts', [detected_act])
-                if source_relates_to and detected_act not in source_relates_to:
-                    logger.info(
-                        "  Skipping '%s' (relates to %s, query is about %s)",
-                        source.name, source_relates_to, detected_act,
-                    )
-                    continue
+            if detected_act and source.relates_to_acts and detected_act not in source.relates_to_acts:
+                logger.info("  Skipping '%s' (relates to %s, query is about %s)",
+                            source.name, source.relates_to_acts, detected_act)
+                continue
 
             try:
                 source_hits = [(r, source) for r in idx.search(query_vec)]
@@ -987,7 +1059,7 @@ class FeedbackStore:
 
     def __init__(self, path: str = _FEEDBACK_FILE) -> None:
         self._path = path
-        self._lock = threading.Lock()
+        self._lock_path = self._path + ".lock"
 
     def save(
         self,
@@ -1009,7 +1081,8 @@ class FeedbackStore:
             "failure_type":     failure_type or "",
             "comment":          comment.strip(),
         }
-        with self._lock:
+        
+        with FileLock(self._lock_path):
             records = self._load_raw()
             records.append(entry)
             try:
@@ -1019,7 +1092,7 @@ class FeedbackStore:
                 logger.error("FeedbackStore save failed: %s", exc)
 
     def load(self) -> List[Dict]:
-        with self._lock:
+        with FileLock(self._lock_path):
             return self._load_raw()
 
     def _load_raw(self) -> List[Dict]:
@@ -1222,11 +1295,11 @@ RULE 4 - RESPONSE FORMAT (MANDATORY — follow this structure exactly)
   - Any conditions, exceptions, or deadlines stated in the context.
 
   ---
+  (Strictly output this line only if user's query is related to Companies Act 2016) *For professional assistance, consult a Licensed Secretary or a member of
+  the Professional Bodies listed in the 4th Schedule of the Companies Act 2016.*
+
   *This response is for informational purposes only and does not constitute
   legal advice. Always verify against the current official legislation.*
-
-  (Strictly only if user's query is related to Companies Act 2016) *For professional assistance, consult a Licensed Secretary or a member of
-  the Professional Bodies listed in the 4th Schedule of the Companies Act 2016.*
 
 RULE 5 - NO THINKING OUT LOUD
   - Do NOT output any internal reasoning, deliberation, or chain-of-thought.
@@ -1260,7 +1333,7 @@ RULE 5 - NO THINKING OUT LOUD
         ) if detected_act else ""
 
         prompt = (
-            f"<<CONTEXT_BLOCK>>\n"
+            f"/no_think\n<<CONTEXT_BLOCK>>\n"
             f"{'─' * 72}\n"
             f"{context_block}\n"
             f"{'─' * 72}\n\n"
@@ -1283,7 +1356,7 @@ RULE 5 - NO THINKING OUT LOUD
 
         # Strip reasoning blocks
         text = re.sub(
-            r"<(?:think|thinking|reasoning|reflection)>.*?</(?:think|thinking|reasoning|reflection)>",
+            r"<(?:think|thinking|reasoning|reflection)>.*$",
             "", text, flags=re.DOTALL | re.IGNORECASE
         )
 
@@ -1291,7 +1364,7 @@ RULE 5 - NO THINKING OUT LOUD
         text = text.strip()
 
         # Detect truncation
-        if text and not re.search(r"[.!?)\]`*-]\s*$", text):
+        if text and not re.search(r"[.!?)\]`*|\-\w]\s*$", text, re.IGNORECASE):
             text += (
                 "\n\n---\n"
                 "⚠️ *The response was cut off before completion. "
@@ -1325,14 +1398,32 @@ RULE 5 - NO THINKING OUT LOUD
             if r.status_code != 200:
                 yield f"❌ LLM returned HTTP {r.status_code}."
                 return
+            think_buf = ""
+            in_think  = False
             for line in r.iter_lines():
                 if line:
                     chunk = json.loads(line)
                     token = chunk.get("response", "")
-                    if token:
-                        yield token
-                    if chunk.get("done"):
-                        break
+                    if not token:
+                        if chunk.get("done"):
+                            break
+                        continue
+                    think_buf += token
+                    # flush when clearly outside any think block
+                    if "<think>" in think_buf:
+                        in_think = True
+                    if in_think:
+                        if "</think>" in think_buf:
+                            think_buf = re.sub(r"<think>.*?</think>", "", think_buf, flags=re.DOTALL)
+                            in_think = False
+                            if think_buf:
+                                yield think_buf
+                                think_buf = ""
+                    else:
+                        yield think_buf
+                        think_buf = ""
+            if think_buf and not in_think:
+                yield think_buf
         except requests.Timeout:
             yield "❌ The model took too long. Try a shorter or simpler question."
         except requests.ConnectionError:
@@ -1434,7 +1525,8 @@ class StorageService:
     def save_history(history: List[Dict]) -> None:
         try:
             with open(_CHAT_HISTORY_FILE, "w", encoding="utf-8") as fh:
-                json.dump(history, fh, indent=2, default=str, ensure_ascii=False)
+                history_to_save = history[-200:]
+                json.dump(history_to_save, fh, indent=2, default=str, ensure_ascii=False)
         except Exception as exc:
             logger.error("Save history failed: %s", exc)
 
@@ -1457,11 +1549,12 @@ class StorageService:
         }
         try:
             with _qa_log_lock:
-                new_df = pd.DataFrame([row])
-                if os.path.exists(_QA_LOG_FILE):
-                    existing = pd.read_csv(_QA_LOG_FILE)
-                    new_df   = pd.concat([existing, new_df], ignore_index=True)
-                new_df.to_csv(_QA_LOG_FILE, index=False, encoding="utf-8")
+                file_exists = os.path.exists(_QA_LOG_FILE)
+                with open(_QA_LOG_FILE, "a", newline="", encoding="utf-8") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerow(row)
         except Exception as exc:
             logger.error("Log QA failed: %s", exc)
 
@@ -1988,7 +2081,7 @@ def _render_messages() -> None:
             cats = msg.get("categories_hit", [])
             if cats:
                 badge_html = " ".join(
-                    f'<span class="badge">{c}</span>' for c in cats
+                    f'<span class="badge">{html.escape(c)}</span>' for c in cats
                 )
                 st.markdown(badge_html, unsafe_allow_html=True)
 
@@ -2199,13 +2292,14 @@ def main() -> None:
             )
             patches  = opt.get_patches()
 
-        with st.chat_message("assistant", avatar="⚖️"):
-            if not result["chunks"]:
-                response = (
+        response = (
                     "No relevant sections were found in the selected knowledge sources. "
                     "Please rephrase your question, enable more sources, or consult a "
                     "licensed professional."
                 )
+
+        with st.chat_message("assistant", avatar="⚖️"):
+            if not result["chunks"]:
                 st.markdown(response)
             else:
                 system = llm._SYSTEM_BASE
@@ -2222,12 +2316,26 @@ def main() -> None:
                     context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
                 context_block = "\n\n".join(context_parts)
                 prompt = (
-                    f"<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                    f"/no_think\n<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
                     f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
                     f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
                 )
-                response = st.write_stream(llm._call(prompt, system=system))
-                response = llm._postprocess(response)
+                try:
+                    response_placeholder = st.empty()
+                    accumulated = ""
+                    for token in llm._call(prompt, system=system):
+                        accumulated += token
+                        response_placeholder.markdown(accumulated + "▌")   # live typewriter effect
+                    response = llm._postprocess(accumulated)
+                    response_placeholder.markdown(response)
+                    if len(response.strip()) < 30 and not response.startswith("❌"):
+                        logger.warning("LLM returned near-empty response; retrying once.")
+                        response_list = list(llm._call(prompt, system=system))
+                        response = llm._postprocess("".join(response_list))
+                        response_placeholder.markdown(response)
+                except Exception as exc:
+                    response = f"❌ Unexpected error during generation: {exc}"
+                    st.markdown(response)
 
         timestamp = datetime.now().isoformat()
         qa_id     = _make_qa_id(user_input, timestamp)

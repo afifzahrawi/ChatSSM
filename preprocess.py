@@ -71,6 +71,8 @@ import logging
 import os
 import re
 import sys
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -1094,7 +1096,9 @@ def _split_at_sentences(text: str, max_chars: int) -> List[str]:
         for m in re.finditer(r"[.!?]\s+", text[:max_chars]):
             candidate = m.end()
             before = text[:candidate]
-            if "\n" in before and before.rindex("\n") > before.rindex("|") if "|" in before else True:
+            if "|" not in before or (
+                "\n" in before and before.rindex("\n") > before.rindex("|")
+            ):
                 split_at = candidate
         if split_at == -1:
             # No sentence boundary — split at last whitespace
@@ -1408,7 +1412,17 @@ _FEE_ROW_RE = re.compile(r"(\d{1,3}(,\d{3})*\.\d{2}|Tiada\b)", re.IGNORECASE)
 
 # Title-case gazette heading — max 90 chars to cover long Malaysian headings
 # e.g. "Lodgement of documents or application through electronic filing system" (70 chars)
-_GAZETTE_HEADING_RE = re.compile(r"^[A-Z][a-zA-Z].{2,88}$")
+_GAZETTE_HEADING_RE = re.compile(
+    r"^[A-Z][a-zA-Z][\w\s,\-/()&']{1,78}$"
+)
+
+# Prose-starter words that never open a gazette heading
+_GAZETTE_PROSE_STARTER_RE = re.compile(
+    r"^(Pursuant|Subject|Notwithstanding|In\s+accordance|Provided|However|"
+    r"Upon|All\s+persons?|Any\s+persons?|Every\s+persons?|No\s+persons?|"
+    r"The\s+(Minister|Registrar|company|licensee|holder|applicant|person))\b",
+    re.IGNORECASE,
+)
 
 
 def _is_gazette_heading(line: str) -> bool:
@@ -1439,6 +1453,12 @@ def _is_gazette_heading(line: str) -> bool:
         return False
     # Reject long prose sentences
     if len(line) > 100:
+        return False
+    if len(line.split()) > 12:          # real headings are concise noun phrases
+        return False
+    if _GAZETTE_PROSE_STARTER_RE.match(line):   # common sentence openers
+        return False
+    if line.endswith(",") or line.endswith(";"):
         return False
     if _GAZETTE_HEADING_RE.match(line):
         return True
@@ -1502,7 +1522,6 @@ def parse_gazette_document(
     rows: List[Dict] = []
 
     current_heading     = ""
-    current_regulation  = ""    # "Regulation 3" etc. for section column
     current_part        = ""    # running header for part column
     current_lines: List[str] = []
     in_schedule         = False
@@ -1536,9 +1555,9 @@ def parse_gazette_document(
             })
 
     # "IN exercise of the powers..." marks start of English body
-    _ENGLISH_START = re.compile(r"^IN|In\s+exercise\s+of", re.IGNORECASE)
+    _ENGLISH_START = re.compile(r"^IN\s+exercise\s+of", re.IGNORECASE)
     # "PADA menjalankan..." marks start of Malay body
-    _MALAY_START   = re.compile(r"^PADA|Pada\s+menjalankan", re.IGNORECASE)
+    _MALAY_START   = re.compile(r"^PADA\s+menjalankan", re.IGNORECASE)
     # Signing block at end of Malay section
     _SIGNING       = re.compile(r"^(Dibuat|Made\s+\d|DATO|Yang\s+Berhormat)", re.IGNORECASE)
     # Standalone fee amount line: "1,000.00"  "300.00"
@@ -1604,13 +1623,15 @@ def parse_gazette_document(
         if _SCHEDULE_RE.match(line) and in_english_body:
             _flush()
             in_schedule   = True
-            schedule_name = "Schedule – Fees"
-            current_heading = "Schedule – Fees (Regulation 8)"
-            current_part    = "Schedule – Fees"
+            schedule_label  = line.strip()
+            schedule_name   = schedule_label
+            current_heading = schedule_label
+            current_part    = schedule_label
             continue
 
-        # ── Skip schedule column headers and "(Regulation 8)" sub-title ───────
-        if in_schedule and _SCHED_COL_HDR.match(line):
+        # ── Within-schedule sub-heading (e.g. "FEES", "PENALTIES") ───────────
+        if in_schedule and _CAPS_HEADING_RE.match(line) and not _SCHED_COL_HDR.match(line):
+            current_heading = f"{schedule_name} - {line.strip()}"
             continue
 
         # ── Fee amount-only lines: attach to preceding item ───────────────────
@@ -1622,7 +1643,6 @@ def parse_gazette_document(
         if _is_gazette_heading(line) and not in_schedule:
             _flush()
             current_heading    = line
-            current_gazette = line
             if len(line.split()) <= 8:
                 current_part = line
             continue
@@ -1653,7 +1673,7 @@ def process_csv_source(source: SourceEntry) -> List[Dict]:
         return []
 
     try:
-        df = pd.read_csv(path, encoding="utf-8")
+        df = pd.read_csv(path, encoding="utf-8", dtype=str).fillna("")
         df.columns = [c.strip() for c in df.columns]
     except Exception as exc:
         logger.error("  Failed to read CSV: %s", exc)
@@ -1695,19 +1715,24 @@ def process_csv_source(source: SourceEntry) -> List[Dict]:
     logger.info("  Loaded %d rows from CSV '%s'.", len(rows), source.name)
     return rows
 
-
 # ─── Write CSV ────────────────────────────────────────────────────────────────
 
 def write_csv(rows: List[Dict], output_path: str) -> None:
     """Write rows to the standard processed CSV format."""
+    tmp = output_path + ".tmp"
     try:
-        with open(output_path, "w", newline="", encoding="utf-8") as fh:
+        with open(tmp, "w", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(rows)
+        shutil.move(tmp, output_path)
         logger.info("  Saved %d rows -> %s", len(rows), output_path)
     except Exception as exc:
         logger.error("  Failed to write CSV %s : %s", output_path, exc)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         raise
 
 # ─── Main processing function ─────────────────────────────────────────────────
@@ -1905,8 +1930,8 @@ TEXT:
             r = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
-                    "model":  os.environ.get("CHATSSM_LLM_MODEL", "deepseek-r1:8b"),
-                    "prompt": CHUNK_PROMPT.format(text=page_text),
+                    "model":  os.environ.get("CHATSSM_LLM_MODEL", "qwen3:8b"),
+                    "prompt": CHUNK_PROMPT.replace("{text}", page_text),
                     "stream": False,
                     "options": {"temperature": 0.0, "num_predict": 2000},
                 },
@@ -1917,10 +1942,12 @@ TEXT:
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
             raw = re.sub(r"```json|```", "", raw)
 
-            m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
-            if not m:
+            start = raw.find('[')
+            end   = raw.rfind(']')
+            if start == -1 or end == -1 or start >= end:
                 raise ValueError("No JSON array found in model response")
-            parsed = json.loads(m.group(0))
+            m_text = raw[start:end+1]
+            parsed = json.loads(m_text)
 
             for item in parsed:
                 content = item.get("content", "").strip()
