@@ -106,15 +106,19 @@ class AppConfig:
     LLM_MAX_TOKENS:  int   = 1200
     LLM_TIMEOUT:     int   = 300    # seconds
     LLM_NUM_CTX: int = 6144   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
+    LLM_NUM_GPU:       int = int(os.environ.get("CHATSSM_LLM_NUM_GPU",       "-1"))
+
     # ── Embedding ─────────────────────────────────────────────────────────────
     EMBEDDING_TIMEOUT: int = 15     # seconds per call
     EMBEDDING_WORKERS: int = 4      # Parallel workers for index building.
+    EMBEDDING_NUM_GPU: int = int(os.environ.get("CHATSSM_EMBEDDING_NUM_GPU", "-1"))
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     SIMILARITY_THRESHOLD: float = 0.45
     TOP_K_PER_SOURCE:     int   = 4
     GLOBAL_TOP_K:         int   = 8   # total chunks sent to LLM
     MAX_CHUNK_CHARS:     int   = 1200  # Truncate chunks in the prompt to this many characters to avoid hitting LLM token limits.
+    MAX_TABLE_CHARS:  int = 2500
 
     # ── Paths ─────────────────────────────────────────────────────────────────
     SOURCES_CONFIG:  str = "knowledge_sources.json"
@@ -175,7 +179,7 @@ _VALID_CATEGORIES: List[str] = [
     "Legislations", "Practice Notes", "Practice Directives",
     "Guidelines", "Circular", "FAQ", "Forms",
 ]
-_VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "others"]
+_VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "slide", "others"]
 
 
 def _filename_to_key(filename: str) -> str:
@@ -224,7 +228,8 @@ class SourceRegistry:
                     continue
 
                 for fname in sorted(os.listdir(dt_path)):
-                    if not fname.lower().endswith((".pdf", ".csv")):
+                    _SUPPORTED = (".pdf", ".csv", ".png", ".jpg", ".jpeg", ".webp", ".pptx", ".pptm")
+                    if not fname.lower().endswith(_SUPPORTED):
                         continue
                     fpath = os.path.join(dt_path, fname)
                     key   = _filename_to_key(fname)
@@ -235,11 +240,15 @@ class SourceRegistry:
                             discovered[key].local_path, fpath, key
                         )
                         continue
+                    
+                    ext = os.path.splitext(fname)[1].lower()
+                    ftype = "csv" if ext == ".csv" else ("pptx" if ext in (".pptx", ".pptm") else ("image" if ext in (".png", ".jpg", ".jpeg", ".webp") else "pdf"))
+                    
                     discovered[key] = SourceEntry(
                         key        = key,
                         name       = os.path.splitext(fname)[0],
                         category   = cat_name,
-                        type       = "csv" if fname.lower().endswith(".csv") else "pdf",
+                        type       = ftype,
                         enabled    = True,
                         url        = None,
                         local_path = fpath,
@@ -258,23 +267,31 @@ class SourceRegistry:
             return {}
 
         overrides: Dict[str, SourceEntry] = {}
+        _VALID_TYPES = {"pdf", "csv", "image", "pptx"}
         for raw in data.get("sources", []):
             if "_note" in raw or "_comment" in raw:
                 continue
+            raw_key = raw.get("key")
+            if not raw_key:
+                logger.warning("Skipping JSON entry with missing 'key': %s", raw)
+                continue
+            se_type = raw.get("type", "pdf")
+            if se_type not in _VALID_TYPES:
+                logger.warning("Unknown source type '%s' for key '%s'. Defaulting to 'pdf'.", se_type, raw_key)
+                se_type = "pdf"
             try:
-                key = raw["key"]
-                overrides[key] = SourceEntry(
-                    key             = key,
-                    name            = raw.get("name", key),
+                overrides[raw_key] = SourceEntry(
+                    key             = raw_key,
+                    name            = raw.get("name", raw_key),
                     category        = raw.get("category", ""),
-                    type            = raw.get("type", "pdf"),
+                    type            = se_type,
                     enabled         = raw.get("enabled", True),
                     url             = raw.get("url"),
                     local_path      = raw.get("local_path"),
-                    relates_to_acts = raw.get("relates_to_acts", []),  # BUG FIX: now loaded
+                    relates_to_acts = raw.get("relates_to_acts", []),
                 )
-            except KeyError:
-                pass
+            except Exception as exc:
+                logger.warning("Skipping malformed JSON entry '%s': %s", raw_key, exc)
         return overrides
 
     def _load(self) -> None:
@@ -479,8 +496,9 @@ class EmbeddingService:
                     idx = futures[future]
                     vec = None
                 results[idx] = vec
-                misses += 1
                 completed += 1
+                if vec is None:
+                    misses += 1
                 if progress_cb:
                     progress_cb(completed, total)
 
@@ -521,7 +539,11 @@ class EmbeddingService:
         try:
             r = requests.post(
                 f"{AppConfig.OLLAMA_BASE_URL}/api/embeddings",
-                json={"model": AppConfig.EMBEDDING_MODEL, "prompt": text},
+                json={
+                    "model":   AppConfig.EMBEDDING_MODEL,
+                    "prompt":  text,
+                    "options": {"num_gpu": AppConfig.EMBEDDING_NUM_GPU},
+                },
                 timeout=AppConfig.EMBEDDING_TIMEOUT,
             )
             if r.status_code == 200:
@@ -587,30 +609,37 @@ class EmbeddingService:
             return {}
 
     def _save_disk(self) -> None:
-        """Thread-safe disk flush. Called once after a batch, not per-embedding."""
+        """Thread-safe atomic disk flush."""
         with self._disk_lock:
             dir_ = os.path.dirname(_EMBEDDING_CACHE)
-            with tempfile.NamedTemporaryFile("wb", dir=dir_, delete=False) as tmp:
-                tmp_path = tmp.name
+            tmp_path = None
+            try:
+                # Write to temp file
+                fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".tmp")
                 try:
-                    pickle.dump(self._disk, tmp)
+                    with os.fdopen(fd, "wb") as fh:
+                        pickle.dump(self._disk, fh)
+                    # fd is now fully closed — safe to move on Windows
+                except Exception:
+                    os.close(fd)   # ensure fd closed even if fdopen fails
+                    raise
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    pass           # chmod not supported on all Windows configs
+                shutil.move(tmp_path, _EMBEDDING_CACHE)
+                tmp_path = None    # move succeeded — no cleanup needed
+            except Exception as exc:
+                logger.warning("Disk cache save failed: %s", exc)
+                if tmp_path and os.path.exists(tmp_path):
                     try:
-                        os.chmod(tmp_path, 0o600)
+                        os.unlink(tmp_path)
                     except OSError:
                         pass
-                    shutil.move(tmp_path, _EMBEDDING_CACHE)
-                except Exception as exc:
-                    logger.warning("Disk cache save failed: %s", exc)
-                    try:
-                        os.unlink(tmp_path)   # clean up orphan
-                    except Exception:
-                        pass
-
 
 # =============================================================================
 # DOCUMENT INDEX  (per-source numpy matrix store)
 # =============================================================================
-
 
 class DocumentIndex:
     """
@@ -708,15 +737,25 @@ class DocumentIndex:
         return os.path.join(AppConfig.CACHE_DIR, f"{self._key}_index.pkl")
 
     def save(self) -> None:
+        tmp = None
         try:
             tmp = self._cache_path + ".tmp"
             with open(tmp, "wb") as fh:
                 pickle.dump({"version": 3, "chunks": self._chunks, "matrix": self._matrix}, fh)
-            os.chmod(tmp, 0o600)
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
             shutil.move(tmp, self._cache_path)
+            tmp = None
             logger.info("Saved index '%s'.", self._key)
         except Exception as exc:
             logger.warning("Could not save index '%s': %s", self._key, exc)
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def load(self) -> bool:
         if not os.path.exists(self._cache_path):
@@ -940,31 +979,46 @@ class KnowledgeBase:
 
         detected_act = self._detect_query_act(query)
 
-        hits_by_source: Dict[str, List[Tuple[SearchResult, SourceEntry]]] = {}
-
+        # Build the list of sources to search first (filter before dispatching)
+        sources_to_search: List[Tuple[DocumentIndex, SourceEntry]] = []
         for source in self._registry.all_enabled():
             if source.key not in selected_keys:
                 continue
             if cat_filter and source.category not in cat_filter:
                 continue
-
-            idx = self.get_or_build(source)
-            if idx is None:
-                continue
-
             if detected_act and source.relates_to_acts and detected_act not in source.relates_to_acts:
-                logger.info("  Skipping '%s' (relates to %s, query is about %s)",
-                            source.name, source.relates_to_acts, detected_act)
+                logger.info(
+                    "  Skipping '%s' (relates to %s, query is about %s)",
+                    source.name, source.relates_to_acts, detected_act,
+                )
                 continue
+            idx = self.get_or_build(source)
+            if idx is not None:
+                sources_to_search.append((idx, source))
 
+        def _search_one(
+            args: Tuple[DocumentIndex, SourceEntry]
+        ) -> Tuple[str, List[Tuple[SearchResult, SourceEntry]]]:
+            idx, source = args
             try:
-                source_hits = [(r, source) for r in idx.search(query_vec)]
+                hits = [(r, source) for r in idx.search(query_vec)]
+                if hits:
+                    logger.info("  Source '%s': %d results", source.name, len(hits))
+                return source.key, hits
             except Exception as exc:
-                logger.error("Index search failed for '%s': %s. Try clearing the cache.", source.key, exc)
-                continue
-            if source_hits:
-                hits_by_source[source.key] = source_hits
-                logger.info("  Source '%s': %d results", source.name, len(source_hits))
+                logger.error(
+                    "Index search failed for '%s': %s. Try clearing the cache.",
+                    source.key, exc,
+                )
+                return source.key, []
+
+        hits_by_source: Dict[str, List[Tuple[SearchResult, SourceEntry]]] = {}
+        _SEARCH_WORKERS = min(len(sources_to_search), 8)  # cap at 8; diminishing returns above this
+        if sources_to_search:
+            with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as pool:
+                for key, hits in pool.map(_search_one, sources_to_search):
+                    if hits:
+                        hits_by_source[key] = hits
 
         all_hits: List[Tuple[SearchResult, SourceEntry]] = []
         for source_results in hits_by_source.values():
@@ -1085,11 +1139,17 @@ class FeedbackStore:
         with FileLock(self._lock_path):
             records = self._load_raw()
             records.append(entry)
+            tmp_path = self._path + ".tmp"
             try:
-                with open(self._path, "w", encoding="utf-8") as fh:
+                with open(tmp_path, "w", encoding="utf-8") as fh:
                     json.dump(records, fh, indent=2, ensure_ascii=False)
+                shutil.move(tmp_path, self._path)
             except Exception as exc:
                 logger.error("FeedbackStore save failed: %s", exc)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def load(self) -> List[Dict]:
         with FileLock(self._lock_path):
@@ -1237,6 +1297,124 @@ class PromptOptimizer:
             if counts.get(k, 0) / negative >= self.PATCH_THRESHOLD
         ]
 
+# =============================================================================
+# Conversation memory
+# =============================================================================
+
+@dataclass
+class ConversationMemory:
+    """
+    Manages short-term conversation context for a single session.
+
+    Responsibilities:
+      1. Store raw turns for direct history injection (last MAX_RAW_TURNS)
+      2. Rewrite follow-up queries into standalone search queries
+      3. Build the <<HISTORY>> block for prompt injection
+      4. Track token budget consumption
+
+    Future extension points:
+      - _compress_turn(): replace rule-based with LLM summarization
+      - retrieve_long_term(): hook for MemoryIndex search (Phase 2)
+    """
+    MAX_RAW_TURNS:    int = 4     # turns kept verbatim
+    MAX_HIST_TOKENS:  int = 400   # hard token budget for history block
+    REWRITE_THRESHOLD: int = 8    # queries shorter than this word count get rewritten
+
+    _turns: List[Dict] = field(default_factory=list)
+
+    def add_turn(self, query: str, response: str) -> None:
+        self._turns.append({
+            "query":    query,
+            "response": response,
+            "summary":  self._compress_turn(query, response),
+        })
+        # Keep only MAX_RAW_TURNS in working memory
+        if len(self._turns) > self.MAX_RAW_TURNS:
+            self._turns.pop(0)
+
+    def rewrite_query(self, user_input: str, llm_service) -> str:
+        """
+        If the query is a short follow-up, rewrite it as a standalone
+        search query using the last 2 turns as context.
+        Returns the original input unchanged if no rewrite is needed.
+        """
+        if len(user_input.split()) > self.REWRITE_THRESHOLD:
+            return user_input   # Long queries are self-contained
+        if not self._turns:
+            return user_input   # No history to reference
+
+        recent = self._turns[-2:]
+        history_text = "\n".join(
+            f"User: {t['query']}\nAssistant summary: {t['summary']}"
+            for t in recent
+        )
+        rewrite_prompt = (
+            f"Given this recent conversation:\n{history_text}\n\n"
+            f"Rewrite this follow-up question as a complete standalone "
+            f"search query (no pronouns, no references to 'it' or 'that').\n"
+            f"Follow-up: {user_input}\n"
+            f"Standalone query (return ONLY the rewritten query, nothing else):"
+        )
+        try:
+            rewritten = "".join(llm_service._call(rewrite_prompt, system="")).strip()
+            # Strip any think blocks or preamble the model adds
+            rewritten = re.sub(r"<think>.*?</think>", "", rewritten, flags=re.DOTALL).strip()
+            if rewritten and 3 < len(rewritten) < 200:
+                logger.info("Query rewritten: '%s' → '%s'", user_input, rewritten)
+                return rewritten
+        except Exception as exc:
+            logger.warning("Query rewrite failed: %s", exc)
+        return user_input
+
+    def build_history_block(self) -> str:
+        """
+        Returns the <<HISTORY>> prompt block, budget-capped.
+        Uses summaries for older turns, raw text for the most recent turn.
+        """
+        if not self._turns:
+            return ""
+
+        lines = []
+        for i, turn in enumerate(self._turns):
+            is_most_recent = (i == len(self._turns) - 1)
+            q = turn["query"]
+            # Most recent turn: use full response (truncated); older: use summary
+            a = (turn["response"][:500] + "…") if is_most_recent else turn["summary"]
+            lines.append(f"[Turn {i+1}]\nUser: {q}\nAssistant: {a}")
+
+        block = (
+            "<<CONVERSATION HISTORY>>\n"
+            "Use ONLY to resolve references ('it', 'that', 'the fee', etc.).\n"
+            "Do NOT answer from history. Answer only from CONTEXT below.\n"
+            "─" * 40 + "\n"
+            + "\n\n".join(lines)
+            + "\n" + "─" * 40 + "\n\n"
+        )
+        # Hard truncate if budget exceeded
+        if len(block) > self.MAX_HIST_TOKENS * 4:  # ~4 chars per token
+            block = block[:self.MAX_HIST_TOKENS * 4] + "\n[history truncated]\n\n"
+        return block
+
+    @staticmethod
+    def _compress_turn(query: str, response: str) -> str:
+        """
+        Rule-based compression: extract key facts from a response.
+        Preserves: section numbers, RM amounts, day counts, Act names.
+        """
+        # Extract cited sections
+        sections = re.findall(r"[Ss]ection\s+\d+[A-Za-z]?(?:\(\d+\))?", response)
+        # Extract monetary values
+        amounts = re.findall(r"RM\s?[\d,]+(?:\.\d{2})?", response)
+        # Extract day/month counts
+        deadlines = re.findall(r"\d+\s+(?:days?|months?|years?)", response)
+        # First sentence of response (the direct answer)
+        first_sent = response.split(".")[0].strip()[:150]
+
+        facts = sections[:3] + amounts[:2] + deadlines[:2]
+        summary = first_sent
+        if facts:
+            summary += f" [{', '.join(facts)}]"
+        return summary[:300]
 
 # =============================================================================
 # LLM SERVICE
@@ -1250,60 +1428,57 @@ class LLMService:
     """
 
     _SYSTEM_BASE = """\
-You are a precise legal reference assistant for Suruhanjaya Syarikat Malaysia (SSM).
-Your sole purpose is to provide information that is EXPLICITLY stated in the documents
-provided in the CONTEXT block below.
+You are a knowledgeable and approachable legal assistant for Suruhanjaya Syarikat Malaysia (SSM).
+Your role is to help users understand Malaysian company law in a clear, conversational way —
+as if a senior corporate secretary is explaining it to a colleague over a desk.
 
-ABSOLUTE RULES  -  YOU MUST FOLLOW ALL OF THESE WITHOUT EXCEPTION
+ACCURACY RULES  —  NON-NEGOTIABLE
 
-RULE 1 - EXACT WORDING ONLY
-  • Use ONLY the exact words, phrases, and sentences from the CONTEXT.
-  • Do NOT paraphrase, reword, summarise, or interpret legal text.
-  • Do NOT draw on general knowledge outside the CONTEXT.
+RULE 1 — STAY WITHIN THE CONTEXT
+  • Every factual statement MUST come from the CONTEXT block below.
+  • Do NOT add information from your general training knowledge.
+  • If the answer is not in the CONTEXT, say so clearly (see Rule 5).
 
-RULE 2 - MANDATORY CITATIONS
-  • Every factual statement MUST be followed by its citation in bold.
-  • Format:  **(Section 14(1), Companies Act 2016)**
-             **(Section 7, Registration of Businesses Act 1956)**
-             **(Practice Note No. 3/2018, paragraph 8)**
-  • The source name in your citation MUST match the [SOURCE: ...] label
-    in the CONTEXT block immediately above the text you are quoting.
-  • If multiple sources support a statement, cite all of them.
+RULE 2 — CITE EVERYTHING
+  • After every factual statement, cite the source in bold.
+  • Format: **(Section 14(1), Companies Act 2016)** or **(Practice Note 3/2018, para 8)**
+  • Never make a factual claim without a citation immediately after it.
 
-RULE 3 - OUT-OF-SCOPE RESPONSE
-  • If the answer is NOT present in the CONTEXT, respond with EXACTLY:
-    "This information is not found in the provided documents.
-     Please consult a licensed professional or contact SSM directly at www.ssm.com.my."
-  • Do NOT attempt to answer from memory or inference.
+RULE 3 — EXACT NUMBERS, DATES AND THRESHOLDS
+  • Copy every number, deadline, ringgit amount, and percentage exactly as it appears
+    in the CONTEXT. Do not round, approximate, or paraphrase these.
 
-RULE 4 - RESPONSE FORMAT (MANDATORY — follow this structure exactly)
-  Use markdown. The response will be rendered in a web interface that supports
-  **bold**, bullet points, numbered lists, and headings.
+RULE 4 — LEGAL TERMS
+  • Reproduce defined legal terms (e.g. "beneficial owner", "lodgement") exactly as written.
+  • Paraphrasing legal definitions changes their legal meaning — never do this.
 
-  Structure every response as follows:
+RULE 5 — OUT OF SCOPE
+  • If the CONTEXT does not contain enough information to answer the question, respond:
+    "I couldn't find this in the documents I have access to. For this specific question,
+    I'd recommend checking directly with SSM or consulting a licensed company secretary."
+  • Never speculate or infer beyond what is explicitly stated.
 
-  **Direct Answer**
-  One to three sentences using exact wording from the CONTEXT, with citation.
+TONE AND FORMAT RULES
 
-  **Relevant Provisions**
-  Quote the exact section(s) verbatim, each on its own line:
-  - Section X(Y): "[exact text from the Act]" **(Section X(Y), Act Name)**
-  - Section X(Z): "[exact text]" **(Section X(Z), Act Name)**
+TONE — Write in a warm, natural, professional tone:
+  • Use plain English where possible, then introduce the legal term.
+    Example: "The deadline to file (called the 'lodgement period') is 30 days..."
+  • Address the user directly using "you" and "your company".
+  • Avoid sounding like a legal statute. Explain it, then cite it.
 
-  **Practical Notes** *(only include if directly supported by the CONTEXT)*
-  - Briefly explain how this applies to the user's query in practice.
-  - Any conditions, exceptions, or deadlines stated in the context.
+FORMAT — Choose the structure that fits the answer:
+  • Short factual questions → 1-5 paragraph prose answer with inline citations.
+  • Step-by-step procedures → numbered list, one step per item.
+  • Comparing two things   → short table or two labelled paragraphs.
+  • Do NOT use bullet points, headers, or bold text just to look structured.
+    Use them only when they genuinely make the answer clearer.
 
-  ---
-  (Strictly output this line only if user's query is related to Companies Act 2016) *For professional assistance, consult a Licensed Secretary or a member of
-  the Professional Bodies listed in the 4th Schedule of the Companies Act 2016.*
+OPENING — Start with a direct answer to the question, not a preamble.
+  • Good: "Yes, a private company must file its annual return within 30 days..."
+  • Bad:  "According to the CONTEXT provided, I will now explain the requirements..."
 
-  *This response is for informational purposes only and does not constitute
-  legal advice. Always verify against the current official legislation.*
-
-RULE 5 - NO THINKING OUT LOUD
-  - Do NOT output any internal reasoning, deliberation, or chain-of-thought.
-  - Go directly to the formatted answer. Never output <think> tags or similar.
+CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer" 
+  unless the question is genuinely outside the documents (Rule 5).
 """
 
     def generate(self, query, context_chunks, citations=None, prompt_patches="", detected_act=None):
@@ -1389,6 +1564,7 @@ RULE 5 - NO THINKING OUT LOUD
                         "num_predict": AppConfig.LLM_MAX_TOKENS,
                         "num_ctx":     AppConfig.LLM_NUM_CTX,
                         "repeat_penalty": 1.0,
+                        "num_gpu":        AppConfig.LLM_NUM_GPU,
                         "stop":        ["<<USER_QUESTION>>", "<<CONTEXT_BLOCK>>"],
                     },
                 },
@@ -1523,12 +1699,18 @@ class StorageService:
 
     @staticmethod
     def save_history(history: List[Dict]) -> None:
+        tmp_path = _CHAT_HISTORY_FILE + ".tmp"
         try:
-            with open(_CHAT_HISTORY_FILE, "w", encoding="utf-8") as fh:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 history_to_save = history[-200:]
                 json.dump(history_to_save, fh, indent=2, default=str, ensure_ascii=False)
+            shutil.move(tmp_path, _CHAT_HISTORY_FILE)
         except Exception as exc:
             logger.error("Save history failed: %s", exc)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     @staticmethod
     def log_qa(
@@ -1575,6 +1757,7 @@ def _init_session() -> None:
     for key, val in {
         "chat_history": [],
         "cache_stats":  {"hits": 0, "misses": 0},
+        "conv_memory":   ConversationMemory(),
     }.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -1676,7 +1859,7 @@ _CSS = """
 .hdr h1 {
     font-size: 2.1rem;
     font-weight: 700;
-    color: var(--text);
+    color: #f2f2f2;
     margin: 0;
 }
 .hdr p {
@@ -1882,7 +2065,9 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
                     s_icon, s_tip = status_icons.get(
                         idx_status.get(src.key, "needs_preprocess"), ("❓", ""),
                     )
-                    tag = "PDF" if src.type == "pdf" else "CSV"
+
+                    _TYPE_TAG = {"pdf": "PDF", "csv": "CSV", "image": "IMG", "pptx": "PPT"}
+                    tag = _TYPE_TAG.get(src.type, src.type.upper())
 
                     if idx_status.get(src.key) == "needs_preprocess":
                         unprocessed.append(src.key)
@@ -2257,10 +2442,26 @@ def main() -> None:
     _render_messages()
 
     # Auto-scroll
-    st.markdown(
-        "<script>setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),500);</script>",
-        unsafe_allow_html=True,
-    )
+    just_submitted = st.session_state.pop("just_submitted", False)
+
+    if just_submitted:
+        # Post-submit: scroll immediately and keep following streaming content
+        st.markdown(
+            """
+            <script>
+                setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
+                const _s = setInterval(() => window.scrollTo(0, document.body.scrollHeight), 500);
+                setTimeout(() => clearInterval(_s), 4000);
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        # Page load: single scroll after content renders
+        st.markdown(
+            "<script>setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 400);</script>",
+            unsafe_allow_html=True,
+        )
 
     prefill_val = st.session_state.pop("prefill", "")
     user_input = st.chat_input(
@@ -2281,12 +2482,16 @@ def main() -> None:
         store = _store()
         opt   = _optimizer()
 
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        st.markdown(
+            f'<div class="mu"><div class="b">{html.escape(user_input)}</div></div>',
+            unsafe_allow_html=True,
+        )
 
+        memory: ConversationMemory = st.session_state["conv_memory"]
         with st.spinner("_Thinking..._"):
+            search_query = memory.rewrite_query(user_input, llm)
             result = kb.search(
-                query         = user_input,
+                query         = search_query,
                 selected_keys = selected_keys,
                 cat_filter    = cat_filter,
             )
@@ -2310,16 +2515,27 @@ def main() -> None:
                 f"\nNOTE: This query relates to the {result.get('detected_act')}. "
                 f"Prioritize chunks from that Act when constructing your answer.\n"
             ) if result.get("detected_act") else ""
+
             context_parts = []
+
             for i, chunk in enumerate(result["chunks"]):
                 src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
-                safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS] if len(chunk) > AppConfig.MAX_CHUNK_CHARS else chunk
+                if len(chunk) > AppConfig.MAX_CHUNK_CHARS:
+                    if "[TABLE]" in chunk:
+                        # Find the last complete table row before the limit
+                        cut = chunk.rfind("\n", 0, AppConfig.MAX_TABLE_CHARS)
+                        safe_chunk = chunk[:cut] if cut > 0 else chunk[:AppConfig.MAX_TABLE_CHARS]
+                    else:
+                        safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS]
+                else:
+                    safe_chunk = chunk
                 context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
             context_block = "\n\n".join(context_parts)
+            history_block = memory.build_history_block()
             prompt = (
-                f"/no_think\n<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                f"/no_think\n{history_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
                 f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
-                f"ANSWER (use ONLY exact wording from CONTEXT above; cite every statement):\n"
+                f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
             )
 
             def _stream_with_retry(p: str, s: str):
@@ -2360,8 +2576,13 @@ def main() -> None:
                     raw_tokens = []
 
                     with st.spinner("_Retrying generation..._"):
-                        gen2, first2 = _stream_with_retry(prompt, system)
+                        try:
+                            gen2, first2 = _stream_with_retry(prompt, system)
+                        except Exception as exc:
+                            gen2, first2 = iter([]), f"❌ Retry failed: {exc}"
+                            logger.error("LLM retry failed: %s", exc, exc_info=True)
                     stream_box.empty()
+                    
                     if first2:
                         raw_tokens.append(first2)
                         stream_box.markdown("".join(raw_tokens) + "▌")
@@ -2375,6 +2596,7 @@ def main() -> None:
 
         timestamp = datetime.now().isoformat()
         qa_id     = _make_qa_id(user_input, timestamp)
+        memory.add_turn(user_input, response)
 
         record = {
             "qa_id":          qa_id,
@@ -2386,6 +2608,7 @@ def main() -> None:
         }
         st.session_state["chat_history"].append(record)
         store.save_history(st.session_state["chat_history"])
+        st.session_state["just_submitted"] = True
         st.rerun()
 
     # Feedback panel for most recent exchange

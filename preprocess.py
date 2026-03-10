@@ -75,6 +75,8 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from pypdf import PdfReader
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pdfplumber
 import requests
@@ -98,6 +100,17 @@ os.makedirs(SOURCES_DIR,   exist_ok=True)
 
 # Minimum character length to keep a section (filters out headers, TOC noise)
 MIN_CONTENT_CHARS = 60
+
+# ─── OCR / Vision settings ───────────────────────────────────────────────────
+OCR_MODEL          = os.environ.get("CHATSSM_OCR_MODEL", "glm-ocr")
+OCR_TIMEOUT        = int(os.environ.get("CHATSSM_OCR_TIMEOUT", "600"))   # seconds per page/image
+MIN_TEXT_PER_PAGE  = 100   # chars; pages below this are treated as scanned and sent to OCR
+
+# ─── GPU offload settings (Ollama) ──────────────────────────────────────────
+# -1 = all layers on GPU; 0 = CPU only; N = offload N layers
+OCR_NUM_GPU    = int(os.environ.get("CHATSSM_OCR_NUM_GPU",   "-1"))
+CHUNK_NUM_GPU  = int(os.environ.get("CHATSSM_CHUNK_NUM_GPU", "-1"))
+OCR_WORKERS    = int(os.environ.get("CHATSSM_OCR_WORKERS",    "4"))
 
 # ─── CSV output columns ───────────────────────────────────────────────────────
 
@@ -236,7 +249,7 @@ VALID_CATEGORIES: List[str] = [
 ]
 
 # doc_type folder names
-VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "others"]
+VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "slide", "others"]
 
 
 def _filename_to_key(filename: str) -> str:
@@ -323,13 +336,24 @@ def _discover_folder_sources() -> Dict[str, SourceEntry]:
                 )
                 continue
 
+            _SUPPORTED_EXTENSIONS = (".pdf", ".csv", ".png", ".jpg", ".jpeg", ".webp", ".pptx", ".pptm")
+
             for fname in sorted(os.listdir(dt_path)):
-                if not fname.lower().endswith((".pdf", ".csv")):
+                if not fname.lower().endswith(_SUPPORTED_EXTENSIONS):
                     continue
 
                 fpath    = os.path.join(dt_path, fname)
                 key      = _filename_to_key(fname)
-                ftype    = "csv" if fname.lower().endswith(".csv") else "pdf"
+                ext    = os.path.splitext(fname)[1].lower()
+
+                if ext == ".csv":
+                    ftype = "csv"
+                elif ext in (".pptx", ".pptm"):
+                    ftype = "pptx"
+                elif ext in (".png", ".jpg", ".jpeg", ".webp"):
+                    ftype = "image"
+                else:
+                    ftype = "pdf"
 
                 if key in discovered:
                     logger.warning(
@@ -505,6 +529,52 @@ def clean_text(text: str) -> str:
 
     return text.strip()
 
+# ─── OCR via Ollama Vision ────────────────────────────────────────────────────
+
+def ocr_image_bytes(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    """
+    Send one image to the configured Ollama vision model and return the
+    extracted text. Returns "" on any failure.
+
+    Supported models: glm-ocr, llava, minicpm-v, qwen2-vl, etc.
+    Set CHATSSM_OCR_MODEL env var to switch models.
+    """
+    import base64
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    try:
+        resp = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model":  OCR_MODEL,
+                "prompt": (
+                    "Extract ALL text from this image exactly as it appears. "
+                    "If the page has multiple columns, read each column top-to-bottom "
+                    "before moving to the next column (left column first, then right). "
+                    "Preserve paragraph breaks and numbered list structure. "
+                    "Output only the extracted text — no commentary, no labels."
+                ),
+                "images":  [b64],
+                "stream":  False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_gpu":     OCR_NUM_GPU,
+                }
+            },
+            timeout=OCR_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.warning("  OCR model returned HTTP %s.", resp.status_code)
+            return ""
+        text = resp.json().get("response", "").strip()
+        # Strip any accidental <think> blocks from reasoning models
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text
+    except requests.Timeout:
+        logger.warning("  OCR timed out after %ds for image (%d bytes).", OCR_TIMEOUT, len(image_bytes))
+        return ""
+    except Exception as exc:
+        logger.warning("  OCR failed: %s", exc)
+        return ""
 
 # ─── PDF acquisition ──────────────────────────────────────────────────────────
 
@@ -540,17 +610,47 @@ def get_pdf_bytes(source: SourceEntry) -> Optional[bytes]:
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
     """
-    Extract raw text from PDF bytes.
+    Extract text from a PDF.
 
-    Priority:
-      1. pdfplumber  – best quality, handles complex layouts and tables
-      2. pypdf       – fallback for PDFs that pdfplumber cannot open
+    Per-page strategy:
+      1. pdfplumber native extraction.
+      2. If a page yields < MIN_TEXT_PER_PAGE chars (scanned/image page),
+         render it to PNG via pdf2image and send it to the OCR model.
+      3. Tables are always extracted natively as pipe-delimited rows.
+      4. If pdfplumber fails entirely, fall back to pypdf (text-only, no OCR).
+
+    Requires pdf2image + poppler for the OCR path. If pdf2image is not
+    installed, scanned pages are skipped with a warning.
     """
+    try:
+        import pdf2image as _pdf2image
+        _have_pdf2image = True
+    except (ImportError, Exception) as _e:
+        _pdf2image = None
+        _have_pdf2image = False
+        logger.warning(
+            "  pdf2image unavailable (%s) — scanned pages will use pypdf fallback. "
+            "Fix: pip install pdf2image  and install poppler "
+            "(Ubuntu: sudo apt install poppler-utils | "
+            "macOS: brew install poppler | "
+            "Windows: download from https://github.com/oschwartz10612/poppler-windows)",
+            type(_e).__name__,
+        )
+
+    pages_out: List[str] = []
+    ocr_count  = 0
+    total_pages = 0
+
     # ── pdfplumber (primary) ────────────────────────────────────────────────
     try:
-        pages: List[str] = []
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
+            total_pages = len(pdf.pages)
+            native_texts: List[str] = []
+            table_texts:  List[str] = []
+            needs_ocr:    List[int] = []
+
+            for page_num, page in enumerate(pdf.pages):
+                # ── Native text extraction ────────────────────────────────────
                 found_tables = page.find_tables()
                 table_bboxes = [t.bbox for t in found_tables]
 
@@ -561,13 +661,12 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                             if tx0 <= x0 <= tx1 and ttop <= top <= tbottom:
                                 return False
                         return True
-                    text = page.filter(_outside).extract_text()
+                    native_text = page.filter(_outside).extract_text() or ""
                 else:
-                    text = page.extract_text()
-                if text:
-                    pages.append(text)
+                    native_text = page.extract_text() or ""
 
-                # Extract tables and append as pipe-delimited rows
+                # ── Table content ─────────────────────────────────────────────
+                table_text = ""
                 for table in page.extract_tables() or []:
                     rows = []
                     for row in table:
@@ -575,46 +674,126 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                         if any(c and str(c).strip() for c in row):
                             rows.append(row_text)
                     if rows:
-                        pages.append("[TABLE]\n" + "\n".join(rows) + "\n[/TABLE]")
+                        table_text += "\n[TABLE]\n" + "\n".join(rows) + "\n[/TABLE]\n"
 
-        merged_pages = []
-        for p in pages:
-            if (merged_pages
-                    and merged_pages[-1].startswith("[TABLE]")
-                    and p.startswith("[TABLE]")):
-                # Append rows from page N+1 into the existing block, before [/TABLE]
-                merged_pages[-1] = (
-                    merged_pages[-1][:-len("\n[/TABLE]")]
-                    if merged_pages[-1].endswith("\n[/TABLE]")
-                    else merged_pages[-1]
-                ) + "\n" + p[len("[TABLE]\n"):p.rfind("\n[/TABLE]")] + "\n[/TABLE]"
-            else:
-                merged_pages.append(p)
-        pages = merged_pages
+                native_texts.append(native_text)
+                table_texts.append(table_text)
+                if len(native_text) < MIN_TEXT_PER_PAGE:
+                    needs_ocr.append(page_num)
 
-        full = "\n\n".join(pages)
-        table_blocks = [p for p in pages if p.startswith("[TABLE]")]
-        if len(full) > 500 or table_blocks:
-            logger.info("  pdfplumber: extracted %d chars (%d table blocks).", len(full), len(table_blocks))
-            return full
-        logger.warning("  pdfplumber returned very little text; trying pypdf.")
+        # ── Batch OCR all scanned pages — parallel render + OCR ──────────────────
+        ocr_results: Dict[int, str] = {}
+        if needs_ocr and _have_pdf2image:
+            logger.info(
+                "  %d page(s) need OCR. Rendering with %d workers …",
+                len(needs_ocr), OCR_WORKERS,
+            )
+
+            def _render_and_ocr(page_num: int) -> Tuple[int, str]:
+                """Render one page to JPEG and OCR it. Runs in a thread pool."""
+                try:
+                    from PIL import Image as PILImage
+                    page_images = _pdf2image.convert_from_bytes(
+                        pdf_bytes,
+                        dpi        = 300,
+                        fmt        = "jpeg",
+                        first_page = page_num + 1,
+                        last_page  = page_num + 1,
+                    )
+                    if not page_images:
+                        logger.warning("    Page %d: pdf2image returned no image.", page_num + 1)
+                        return page_num, ""
+                    img = page_images[0]
+                    del page_images
+
+                    max_edge = 1400
+                    if max(img.width, img.height) > max_edge:
+                        scale = max_edge / max(img.width, img.height)
+                        resample_filter = (
+                            PILImage.Resampling.LANCZOS
+                            if hasattr(PILImage, "Resampling") else 1
+                        )
+                        img = img.resize(
+                            (int(img.width * scale), int(img.height * scale)),
+                            resample=resample_filter,
+                        )
+
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, format="JPEG", quality=80)
+                    ocr_text = ocr_image_bytes(buf.getvalue(), "image/jpeg")
+
+                    if not ocr_text:
+                        logger.warning(
+                            "    Page %d: OCR failed; retrying at half resolution.", page_num + 1
+                        )
+                        smaller = img.resize((img.width // 2, img.height // 2), resample=1)
+                        buf2 = io.BytesIO()
+                        smaller.convert("RGB").save(buf2, format="JPEG", quality=75)
+                        del smaller
+                        ocr_text = ocr_image_bytes(buf2.getvalue(), "image/jpeg")
+
+                    del img
+                    return page_num, ocr_text or ""
+
+                except Exception as exc:
+                    logger.warning("    Page %d: render or OCR failed: %s", page_num + 1, exc)
+                    return page_num, ""
+
+            try:
+                with ThreadPoolExecutor(max_workers=OCR_WORKERS) as pool:
+                    futures = {pool.submit(_render_and_ocr, pn): pn for pn in needs_ocr}
+                    for future in as_completed(futures):
+                        pn, text = future.result()
+                        if text:
+                            ocr_results[pn] = text
+                            ocr_count += 1
+                        else:
+                            logger.warning("    Page %d: OCR returned empty after retry.", pn + 1)
+            except Exception as exc:
+                logger.warning("  Parallel OCR failed: %s", exc)
+
+        # ── Assemble final pages ──────────────────────────────────────────
+        for page_num in range(total_pages):
+            native_text = native_texts[page_num]
+            table_text  = table_texts[page_num]
+            if len(native_text) >= MIN_TEXT_PER_PAGE:
+                pages_out.append(native_text + table_text)
+            elif page_num in ocr_results:
+                # Prepend any real native text (e.g. page headers) before OCR body
+                prefix = (native_text.strip() + "\n") if native_text.strip() else ""
+                pages_out.append(
+                    f"[OCR PAGE {page_num + 1}]\n{prefix}{ocr_results[page_num]}\n{table_text}"
+                )
+            elif native_text.strip():
+                pages_out.append(native_text + table_text)
+
+        full = "\n\n".join(pages_out)
+        if ocr_count:
+             logger.info(
+                "  Extraction complete: %d / %d page(s) via OCR, %d total chars.",
+                ocr_count, total_pages, len(full),
+            )
+             return full
+        else:
+            logger.info("  pdfplumber: %d chars from %d pages.", len(full), total_pages)
+
+            if len(full) > 500 or "[TABLE]" in full:
+                return full
+            logger.warning("  pdfplumber returned very little text; trying pypdf.")
 
     except Exception as exc:
         logger.warning("  pdfplumber failed (%s); trying pypdf.", exc)
 
-    # ── pypdf (fallback) ────────────────────────────────────────────────────
     try:
-        from pypdf import PdfReader  # noqa: PLC0415
         reader = PdfReader(io.BytesIO(pdf_bytes))
-        pages = [page.extract_text() or "" for page in reader.pages]
-        full = "\n\n".join(p for p in pages if p)
-        logger.info("  pypdf: extracted %d chars.", len(full))
+        pages  = [page.extract_text() or "" for page in reader.pages]
+        full   = "\n\n".join(p for p in pages if p)
+        logger.info("  pypdf fallback: %d chars.", len(full))
         return full
     except Exception as exc:
         logger.error("  pypdf also failed: %s", exc)
 
     return ""
-
 
 # ─── Legal document parser ────────────────────────────────────────────────────
 
@@ -1086,7 +1265,7 @@ def _split_at_sentences(text: str, max_chars: int) -> List[str]:
     if len(text) <= max_chars:
         return [text]
     
-    if "|" in text:
+    if "[TABLE]" in text or text.count("|") > 3:
         return [text] 
 
     chunks: List[str] = []
@@ -1424,6 +1603,17 @@ _GAZETTE_PROSE_STARTER_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ENGLISH_START   = re.compile(r"^IN\s+exercise\s+of",                    re.IGNORECASE)
+_MALAY_START     = re.compile(r"^PADA\s+menjalankan",                     re.IGNORECASE)
+_GAZETTE_SIGNING = re.compile(r"^(Dibuat|Made\s+\d|DATO|Yang\s+Berhormat)", re.IGNORECASE)
+_SOLO_FEE        = re.compile(r"^[\d,]+\.\d{2}\b")
+_SCHED_COL_HDR   = re.compile(
+    r"^\(Regulation \d+\)$"
+    r"|^FEES?$"
+    r"|\(\d+\)\s*(Item|Matter|Fee|Penalty|Bil|Perkara|Remarks|No\.?|Description|Amount)"
+    r"|^(Item\s*No\.?|Description(\s+of\s+Matter)?|Amount\s*\(?RM\)?|Fee\s*\(?RM\)?)$",
+    re.IGNORECASE,
+)
 
 def _is_gazette_heading(line: str) -> bool:
     """
@@ -1554,25 +1744,6 @@ def parse_gazette_document(
                 "content":       chunk,
             })
 
-    # "IN exercise of the powers..." marks start of English body
-    _ENGLISH_START = re.compile(r"^IN\s+exercise\s+of", re.IGNORECASE)
-    # "PADA menjalankan..." marks start of Malay body
-    _MALAY_START   = re.compile(r"^PADA\s+menjalankan", re.IGNORECASE)
-    # Signing block at end of Malay section
-    _SIGNING       = re.compile(r"^(Dibuat|Made\s+\d|DATO|Yang\s+Berhormat)", re.IGNORECASE)
-    # Standalone fee amount line: "1,000.00"  "300.00"
-    _SOLO_FEE      = re.compile(r"^[\d,]+\.\d{2}\b")
-    # Schedule column header inside English schedule
-    _SCHED_COL_HDR = re.compile(
-        r"^\(Regulation \d+\)$"          # "(Regulation 8)" sub-title
-        r"|^FEES?$"                       # "FEE" or "FEES" standalone heading
-        r"|\(\d+\)\s*(Item|Matter|Fee|Penalty|Bil|Perkara|Remarks|No\.?|Description|Amount)"
-                                        # any numbered column header: (1) Item, (4) Penalty, etc.
-        r"|^(Item\s*No\.?|Description(\s+of\s+Matter)?|Amount\s*\(?RM\)?|Fee\s*\(?RM\)?)$",
-                                        # bare column header words without numbering
-        re.IGNORECASE,
-    )
-
     in_english_body = False   # True once "IN exercise of the powers..." seen
     in_malay_body   = False   # True once "PADA menjalankan..." seen
 
@@ -1612,7 +1783,7 @@ def parse_gazette_document(
             continue
         if _NOTE_RE.match(line):
             continue
-        if _SIGNING.match(line):                     # "Dibuat ...", "DATO' ..."
+        if _GAZETTE_SIGNING.match(line):                     # "Dibuat ...", "DATO' ..."
             continue
 
         # ── Bilingual line filter (catches any residual Malay lines) ──────────
@@ -1655,6 +1826,253 @@ def parse_gazette_document(
     logger.info("  Parsed %d chunks from gazette '%s'.", len(rows), source_name)
     return rows
 
+# ─── PPTX extraction ──────────────────────────────────────────────────────────
+
+def extract_pptx_content(pptx_bytes: bytes) -> List[Dict]:
+    """
+    Extract structured content from a PowerPoint file.
+
+    Per slide, collects:
+      - title text (from TITLE/CENTER_TITLE placeholder)
+      - body text (from all other text frames, in reading order)
+      - table content as pipe-delimited rows
+      - speaker notes
+      - raw image bytes (for OCR when a slide has no extractable text)
+
+    Returns a list of slide dicts — one per slide. Empty slides
+    (no text, no images) are included so slide numbering is preserved;
+    parse_slide_document() will filter them.
+    """
+    try:
+        from pptx import Presentation
+    except ImportError:
+        logger.error("  python-pptx not installed. Run:  pip install python-pptx")
+        return []
+
+    # Resolve shape-type enums — name changed in python-pptx 1.x (PP_PLACEHOLDER_TYPE)
+    # Fall back to raw integers if neither name is importable.
+    try:
+        from pptx.enum.shapes import PP_PLACEHOLDER_TYPE as _PPH
+        _TITLE_TYPES = (_PPH.TITLE, _PPH.CENTER_TITLE)
+    except ImportError:
+        try:
+            from pptx.enum.shapes import PP_PLACEHOLDER as _PPH   # 0.x name
+            _TITLE_TYPES = (_PPH.TITLE, _PPH.CENTER_TITLE)
+        except ImportError:
+            _TITLE_TYPES = (1, 3)   # TITLE=1, CENTER_TITLE=3 (stable integer values)
+
+    try:
+        from pptx.enum.shapes import MSO_SHAPE_TYPE as _MSO
+        _PICTURE_TYPE = _MSO.PICTURE
+    except ImportError:
+        _PICTURE_TYPE = 13          # MSO_SHAPE_TYPE.PICTURE=13 (stable integer value)
+
+    slides_data: List[Dict] = []
+    try:
+        prs = Presentation(io.BytesIO(pptx_bytes))
+        for slide_num, slide in enumerate(prs.slides, start=1):
+            title       = ""
+            body_parts: List[str] = []
+            table_rows: List[str] = []
+            image_blobs: List[bytes] = []
+
+            for shape in slide.shapes:
+
+                # ── Text frames ───────────────────────────────────────────────
+                if shape.has_text_frame:
+                    lines = []
+                    for para in shape.text_frame.paragraphs:
+                        para_text = "".join(run.text for run in para.runs).strip()
+                        if para_text:
+                            lines.append(para_text)
+                    combined = "\n".join(lines).strip()
+                    if not combined:
+                        continue
+
+                    # Is this shape a title placeholder?
+                    is_title = False
+                    try:
+                        if (shape.is_placeholder
+                                and shape.placeholder_format.type
+                                    in _TITLE_TYPES):
+                            is_title = True
+                    except Exception:
+                        pass
+
+                    if is_title:
+                        title = combined
+                    else:
+                        body_parts.append(combined)
+
+                # ── Tables ────────────────────────────────────────────────────
+                if shape.has_table:
+                    for row in shape.table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        if any(cells):
+                            table_rows.append(" | ".join(cells))
+
+                # ── Images ────────────────────────────────────────────────────
+                try:
+                    if shape.shape_type == _PICTURE_TYPE:
+                        image_blobs.append(shape.image.blob)
+                except Exception:
+                    pass
+
+            # ── Speaker notes ─────────────────────────────────────────────────
+            notes_text = ""
+            try:
+                if slide.has_notes_slide:
+                    nf = slide.notes_slide.notes_text_frame
+                    notes_text = "\n".join(
+                        "".join(run.text for run in para.runs).strip()
+                        for para in nf.paragraphs
+                    ).strip()
+            except Exception:
+                pass
+
+            slides_data.append({
+                "slide_number": slide_num,
+                "title":        title,
+                "body":         "\n\n".join(body_parts),
+                "notes":        notes_text,
+                "tables":       "[TABLE]\n" + "\n".join(table_rows) + "\n[/TABLE]"
+                                if table_rows else "",
+                "image_blobs":  image_blobs,
+            })
+
+        logger.info("  Extracted content from %d slides.", len(slides_data))
+        return slides_data
+
+    except Exception as exc:
+        logger.error("  PPTX extraction failed: %s", exc)
+        return []
+    
+def parse_slide_document(
+    slides_data: List[Dict],
+    source_key:  str,
+    source_name: str,
+) -> List[Dict]:
+    """
+    Convert extracted PPTX slide data into the standard CSV chunk format.
+
+    One chunk per slide.  Slides with no extractable text but with images
+    are OCR'd.  Oversized slides are split at sentence boundaries.
+    Empty/decorative slides are skipped.
+    """
+    rows: List[Dict] = []
+    last_title = ""   # carries section context for untitled slides
+
+    for slide in slides_data:
+        num    = slide["slide_number"]
+        title  = slide["title"].strip()
+        body   = slide["body"].strip()
+        notes  = slide["notes"].strip()
+        tables = slide["tables"].strip()
+
+        _NOTES_PLACEHOLDER = re.compile(r"^click to add notes$", re.IGNORECASE)
+        if _NOTES_PLACEHOLDER.match(notes):
+            notes = ""
+
+        # ── OCR any images on text-sparse slides ──────────────────────────────
+        ocr_parts: List[str] = []
+        if slide["image_blobs"] and not body:
+            for img_bytes in slide["image_blobs"]:
+                ocr_text = ocr_image_bytes(img_bytes, "image/png")
+                if ocr_text and len(ocr_text.strip()) >= MIN_CONTENT_CHARS:
+                    ocr_parts.append(f"[IMAGE TEXT]\n{ocr_text.strip()}\n[/IMAGE TEXT]")
+
+        # ── Assemble chunk content ─────────────────────────────────────────────
+        content_parts = []
+        if body:
+            content_parts.append(body)
+        if tables:
+            content_parts.append(tables)
+        content_parts.extend(ocr_parts)
+        if notes:
+            content_parts.append(f"[SPEAKER NOTES]\n{notes}")
+
+        content = "\n\n".join(content_parts).strip()
+        if len(content) < MIN_CONTENT_CHARS:
+            continue   # blank / purely decorative slide
+
+        # ── Build section label ────────────────────────────────────────────────
+        if title:
+            section    = f"Slide {num}: {title}"
+            last_title = title
+        elif last_title:
+            section    = f"Slide {num} ({last_title} – cont.)"
+        else:
+            section    = f"Slide {num}"
+
+        # ── Split if over size limit ───────────────────────────────────────────
+        if len(content) > MAX_GENERAL_CHUNK_CHARS:
+            sub_chunks = _split_at_sentences(content, MAX_GENERAL_CHUNK_CHARS)
+        else:
+            sub_chunks = [content]
+
+        for i, chunk in enumerate(sub_chunks):
+            chunk = chunk.strip()
+            if len(chunk) < MIN_CONTENT_CHARS:
+                continue
+            rows.append({
+                "source_key":    source_key,
+                "source_name":   source_name,
+                "part":          title or last_title,
+                "division":      "",
+                "subdivision":   "",
+                "section":       section if i == 0 else f"{section} (part {i + 1})",
+                "section_title": title,
+                "content":       chunk,
+            })
+
+    logger.info(
+        "  Parsed %d chunk(s) from %d slide(s) in '%s'.",
+        len(rows), len(slides_data), source_name,
+    )
+    return rows
+
+# ─── Standalone image source ──────────────────────────────────────────────────
+
+def process_image_source(source: SourceEntry) -> List[Dict]:
+    """
+    OCR a standalone image file (PNG, JPG, JPEG, WEBP) and parse the
+    resulting text with parse_with_ai.
+
+    Use this for scanned single-page documents, notices, or diagrams
+    with embedded text that are delivered as image files rather than PDFs.
+    """
+    path = source.local_path
+    if not path or not os.path.exists(path):
+        logger.error("  Image not found: %s", path)
+        return []
+
+    _MIME = {
+        ".png": "image/png", ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg", ".webp": "image/webp",
+    }
+    mime_type = _MIME.get(os.path.splitext(path)[1].lower(), "image/png")
+
+    try:
+        with open(path, "rb") as fh:
+            image_bytes = fh.read()
+    except Exception as exc:
+        logger.error("  Failed to read image '%s': %s", path, exc)
+        return []
+
+    logger.info("  Running OCR on image (%d bytes) …", len(image_bytes))
+    ocr_text = ocr_image_bytes(image_bytes, mime_type)
+
+    if not ocr_text or len(ocr_text.strip()) < MIN_CONTENT_CHARS:
+        logger.error(
+            "  OCR returned insufficient text for '%s'. "
+            "Check that '%s' is running via 'ollama ps'.",
+            source.key, OCR_MODEL,
+        )
+        return []
+
+    logger.info("  OCR extracted %d chars.", len(ocr_text))
+    cleaned = clean_text(ocr_text)
+    return parse_with_ai(cleaned, source.key, source.name)
 
 # ─── CSV source handling ──────────────────────────────────────────────────────
 
@@ -1764,47 +2182,49 @@ def process_source(source: SourceEntry, force: bool = False) -> bool:
     rows: List[Dict] = []
 
     if source.type == "pdf":
-        # Step 1: acquire bytes
         pdf_bytes = get_pdf_bytes(source)
         if not pdf_bytes:
             logger.error("  Could not acquire PDF for '%s'. Skipping.", source.key)
             return False
-
-        # Step 2: extract text
-        raw_text = extract_pdf_text(pdf_bytes)
+        raw_text = extract_pdf_text(pdf_bytes)   # now OCR-aware
         if not raw_text:
             logger.error("  Text extraction failed for '%s'. Skipping.", source.key)
             return False
-
-        # Step 3: clean text
-        logger.info("  Cleaning text …")
         cleaned = clean_text(raw_text)
-
-        # Step 4: parse — route by doc_type
         logger.info("  Parsing document (doc_type=%s) …", source.doc_type)
-
         if source.doc_type == "act":
             rows = parse_legal_document(cleaned, source.key, source.name)
-
         elif source.doc_type == "general":
             rows = parse_general_document(cleaned, source.key, source.name)
-
         elif source.doc_type == "faq":
             rows = parse_faq_document(cleaned, source.key, source.name)
-
         elif source.doc_type == "gazette":
             rows = parse_gazette_document(cleaned, source.key, source.name)
-
-        elif source.doc_type == "others":
+        elif source.doc_type in ("others", "slide"):
             rows = parse_with_ai(cleaned, source.key, source.name)
-
         else:
-            logger.error(
-                "  Unknown doc_type '%s'. "
-                "Valid values: act | general | faq | gazette. Skipping.",
-                source.doc_type,
-            )
+            logger.error("  Unknown doc_type '%s'. Skipping.", source.doc_type)
             return False
+
+    elif source.type == "image":
+        rows = process_image_source(source)
+
+    elif source.type == "pptx":
+        path = source.local_path
+        if not path or not os.path.exists(path):
+            logger.error("  PPTX file not found: %s", path)
+            return False
+        try:
+            with open(path, "rb") as fh:
+                pptx_bytes = fh.read()
+        except Exception as exc:
+            logger.error("  Failed to read PPTX '%s': %s", path, exc)
+            return False
+        slides_data = extract_pptx_content(pptx_bytes)
+        if not slides_data:
+            logger.error("  No slides extracted from '%s'.", source.key)
+            return False
+        rows = parse_slide_document(slides_data, source.key, source.name)
 
     elif source.type == "csv":
         rows = process_csv_source(source)
@@ -1874,6 +2294,91 @@ def scan_sources() -> None:
     print(f"\n  {len(folder)} folder source(s), {len(json_ov)} JSON entry/entries")
     print(f"  Run without --scan to process all.\n")
 
+# ─── AI chunking helpers ──────────────────────────────────────────────────────
+
+def _sanitize_for_llm(text: str) -> str:
+    """
+    Strip extraction artifacts that confuse the AI chunker or produce invalid
+    JSON — OCR markers, table wrapper tags, Unicode garbage characters.
+    Called once per page-slice before the LLM request.
+    """
+    # Remove OCR page markers injected by extract_pdf_text()
+    text = re.sub(r'\[OCR PAGE \d+\]\n?', '', text)
+    # Remove table wrapper tags; keep the pipe-delimited row content
+    text = re.sub(r'\[(?:/?)TABLE\]\n?', '', text)
+    # Remove image-text wrapper tags from PPTX OCR
+    text = re.sub(r'\[(?:/?)IMAGE TEXT\]\n?', '', text)
+    # Strip Unicode private-use area and replacement characters
+    text = re.sub(r'[\uE000-\uF8FF\uFFFD\uFFFE\uFFFF]', '', text)
+    # Normalise to 2 consecutive newlines maximum
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def _repair_json_strings(s: str) -> str:
+    """
+    Escape control characters that appear as literal bytes inside JSON string
+    values — the most common LLM output defect.
+
+    Standard JSON forbids unescaped U+0000-U+001F inside strings.
+    The existing cleanup regex skips \\x0a (newline) and \\x0d (CR) because
+    they are structurally valid outside strings; this function handles the
+    case where they appear INSIDE strings.
+
+    Uses a single-pass character state machine — O(n), no regex.
+    """
+    out: list = []
+    in_str = False
+    escaped = False
+    _ESC_MAP = {'\n': '\\n', '\r': '\\r', '\t': '\\t'}
+
+    for ch in s:
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == '\\' and in_str:
+            out.append(ch)
+            escaped = True
+        elif ch == '"':
+            in_str = not in_str
+            out.append(ch)
+        elif in_str and ch in _ESC_MAP:
+            out.append(_ESC_MAP[ch])          # \n → \\n, \r → \\r, \t → \\t
+        elif in_str and ord(ch) < 0x20:
+            pass                              # drop remaining C0 control chars
+        else:
+            out.append(ch)
+
+    return ''.join(out)
+
+
+def _split_pages_at_boundary(text: str, max_chars: int) -> list:
+    """
+    Split text into page-slices at paragraph boundaries, not mid-character.
+    This prevents the LLM from receiving a fragment that ends mid-sentence.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    pages = []
+    while len(text) > max_chars:
+        # Prefer paragraph break
+        cut = text.rfind('\n\n', 0, max_chars)
+        if cut == -1 or cut < max_chars // 2:
+            # Fall back to any newline
+            cut = text.rfind('\n', 0, max_chars)
+        if cut == -1 or cut < max_chars // 2:
+            # Fall back to word boundary
+            cut = text.rfind(' ', 0, max_chars)
+        if cut <= 0:
+            cut = max_chars                  # hard cut only as last resort
+        pages.append(text[:cut].strip())
+        text = text[cut:].strip()
+
+    if text:
+        pages.append(text)
+    return pages
+
 def parse_with_ai(
     text: str,
     source_key: str,
@@ -1886,93 +2391,176 @@ def parse_with_ai(
     """
     import json, requests
 
+    # ── System message: suppresses thinking output + enforces JSON-only ──────
+    CHUNK_SYSTEM = (
+        "/no_think\n"
+        "You output ONLY raw JSON. No explanations. No markdown. "
+        "No preamble. No postamble. No code fences."
+    )
+
+    # ── User prompt ───────────────────────────────────────────────────────────
     CHUNK_PROMPT = """\
-You are preprocessing a Malaysian legal document for a retrieval system.
-Split the following text into self-contained chunks, each covering one
-concept, regulation, section, or Q&A pair.
+/no_think
+Split the text below into retrieval chunks for a Malaysian legal document system.
 
-Rules:
-- Keep related sub-items (a)(b)(c) together with their parent clause
-- Keep a table together with the text that introduces it
-- Do NOT split a sentence across chunks
-- Each chunk must make sense on its own without surrounding context
-- For Q&A documents: one chunk = one question + its full answer
-- For tables: preserve the exact pipe-delimited format from the input.
-  Include the header row as the first line of the table in content.
-  Do NOT convert table data to prose or markdown.
+OUTPUT RULES — STRICTLY ENFORCED
+- Your ENTIRE response must be a single JSON array.
+- The FIRST character must be [ and the LAST character must be ].
+- No markdown fences. No explanations. No text before [ or after ].
+- Inside each "content" string, represent newlines as \\n (escaped), NOT as literal line breaks.
+- Minimum content length: 60 characters.
 
-Return ONLY a JSON array, no preamble, no markdown fences:
-[
-  {
-    "part": "PART I - PRELIMINARY",
-    "section": "Section 2",
-    "section_title": "Interpretation",
-    "content": "In this Act, unless the context otherwise requires..."
-  },
-  {
-    "part": "PART I - PRELIMINARY",
-    "section": "Section 3",
-    "section_title": "Application",
-    "content": "This Act applies to all companies registered under..."
-  }
-]
+CHUNKING RULES
+- Keep sub-items (a)(b)(c) together with their parent clause.
+- Keep a table together with the text that introduces it.
+- Do NOT split a sentence across chunks.
+- For Q&A: one chunk = one question + its complete answer.
+
+RESPONSE SCHEMA — each array element:
+{{
+  "part":          "PART name or section group, or empty string",
+  "section":       "Section number/heading, or empty string",
+  "section_title": "Short descriptive title, or empty string",
+  "content":       "Full chunk text with \\n for newlines"
+}}
 
 TEXT:
-{text}
-"""
-    rows = []
-    # Split into ~2000-char pages to stay within context window
-    page_size = 2000
-    pages = [text[i:i+page_size] for i in range(0, len(text), page_size)]
+{text}"""
 
-    for page_num, page_text in enumerate(pages):
+    # ── JSON extraction with 4-pass repair ────────────────────────────────────
+    def _try_parse(raw: str) -> list:
+        start = raw.find('[')
+        end   = raw.rfind(']')
+        if start == -1 or end == -1 or start >= end:
+            raise ValueError("No JSON array found in model response")
+        candidate = raw[start:end + 1]
+
+        # Pass 1 — direct parse (fast path for well-formed output)
         try:
-            r = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model":  os.environ.get("CHATSSM_LLM_MODEL", "qwen3:8b"),
-                    "prompt": CHUNK_PROMPT.replace("{text}", page_text),
-                    "stream": False,
-                    "options": {"temperature": 0.0, "num_predict": 2000},
-                },
-                timeout=120,
-            )
-            raw = r.json().get("response", "").strip()
-            # Strip any <think> blocks before parsing JSON
-            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-            raw = re.sub(r"```json|```", "", raw)
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
 
-            start = raw.find('[')
-            end   = raw.rfind(']')
-            if start == -1 or end == -1 or start >= end:
-                raise ValueError("No JSON array found in model response")
-            m_text = raw[start:end+1]
-            parsed = json.loads(m_text)
+        # Pass 2 — escape literal newlines/CR/tab inside string values
+        try:
+            return json.loads(_repair_json_strings(candidate))
+        except json.JSONDecodeError:
+            pass
 
-            for item in parsed:
-                content = item.get("content", "").strip()
-                if len(content) < 60:
-                    continue
-                rows.append({
-                    "source_key":    source_key,
-                    "source_name":   source_name,
-                    "part":          item.get("part", ""),
-                    "division":      "",
-                    "subdivision":   "",
-                    "section":       item.get("section", ""),
-                    "section_title": item.get("section_title", ""),
-                    "content":       content,
-                })
-        except Exception as exc:
-            logger.warning("AI chunking failed for page %d: %s", page_num, exc)
-            # Fallback: treat entire page as one chunk
-            if len(page_text.strip()) >= 60:
-                rows.append({
-                    "source_key": source_key, "source_name": source_name,
-                    "part": "", "division": "", "subdivision": "",
-                    "section": f"Page {page_num+1}", "section_title": "",
-                    "content": page_text.strip(),
-                })
+        # Pass 3 — strip remaining C0 controls + bad backslashes
+        try:
+            c = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', candidate)
+            c = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', c)
+            return json.loads(c)
+        except json.JSONDecodeError:
+            pass
+
+        # Pass 4 — combine both repairs
+        fixed = _repair_json_strings(candidate)
+        fixed = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', fixed)
+        fixed = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', fixed)
+        return json.loads(fixed)   # raise if still broken — triggers fallback
+
+    # ── Per-page worker ───────────────────────────────────────────────────────
+    def _process_page(args):
+        page_num, page_text = args
+        page_text = _sanitize_for_llm(page_text)
+        if len(page_text.strip()) < 60:
+            return page_num, []
+
+        prompt_body = CHUNK_PROMPT.replace("{text}", page_text)
+        page_rows   = []
+
+        for attempt in range(2):   # one retry on any failure
+            try:
+                r = requests.post(
+                    "http://localhost:11434/api/chat",
+                    json={
+                        "model": os.environ.get("CHATSSM_LLM_MODEL", "qwen3:1.7b"),
+                        "messages": [
+                            {"role": "system", "content": CHUNK_SYSTEM},
+                            {"role": "user",   "content": prompt_body},
+                        ],
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.0,
+                            "num_predict": 3000,
+                            "num_ctx":     6144,
+                            "num_gpu":     CHUNK_NUM_GPU,
+                        },
+                    },
+                    timeout=(10, 180),
+                )
+
+                # ── HTTP guard ────────────────────────────────────────────────
+                if r.status_code != 200:
+                    raise ValueError(
+                        f"Ollama returned HTTP {r.status_code}: {r.text[:200]}"
+                    )
+
+                raw = r.json().get("message", {}).get("content", "").strip()
+
+                # ── Strip thinking blocks (closed and unclosed) ───────────────
+                raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+                raw = re.sub(r"<think>.*$",         "", raw, flags=re.DOTALL)
+                # ── Strip markdown fences ─────────────────────────────────────
+                raw = re.sub(r"```(?:json)?\s*", "", raw)
+                raw = raw.strip()
+
+                parsed = _try_parse(raw)
+
+                for item in parsed:
+                    content = str(item.get("content", "")).strip()
+                    if len(content) < 60:
+                        continue
+                    page_rows.append({
+                        "source_key":    source_key,
+                        "source_name":   source_name,
+                        "part":          str(item.get("part",          "")),
+                        "division":      "",
+                        "subdivision":   "",
+                        "section":       str(item.get("section",       "")),
+                        "section_title": str(item.get("section_title", "")),
+                        "content":       content,
+                    })
+                break   # success — exit retry loop
+
+            except Exception as exc:
+                logger.warning(
+                    "AI chunking attempt %d failed for page %d: %s",
+                    attempt + 1, page_num, exc,
+                )
+                if attempt == 1:   # both attempts failed — store raw text
+                    stripped = page_text.strip()
+                    if len(stripped) >= 60:
+                        page_rows.append({
+                            "source_key":    source_key,
+                            "source_name":   source_name,
+                            "part":          "",
+                            "division":      "",
+                            "subdivision":   "",
+                            "section":       f"Page {page_num + 1}",
+                            "section_title": "",
+                            "content":       stripped,
+                        })
+
+        return page_num, page_rows
+
+    # ── Split and dispatch ─────────────────────────────────────────────────────
+    page_size = 2500   # was 1000 — too small, produced mid-sentence fragments
+    pages   = _split_pages_at_boundary(text, page_size)
+    workers = int(os.environ.get("CHATSSM_CHUNK_WORKERS", "3"))
+
+    rows_by_page: Dict[int, List[Dict]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_process_page, (i, p)): i for i, p in enumerate(pages)}
+        for future in as_completed(futures):
+            page_num, page_rows = future.result()
+            rows_by_page[page_num] = page_rows
+
+    rows: List[Dict] = []
+    for i in range(len(pages)):
+        rows.extend(rows_by_page.get(i, []))
 
     logger.info("  AI parser: produced %d chunks from '%s'.", len(rows), source_name)
     return rows
@@ -2047,5 +2635,6 @@ def main() -> None:
         print(f"\n  Output files: {PROCESSED_DIR}/")
         print("  Start app:    streamlit run chatssm_app.py")
     print()
+
 if __name__ == '__main__':
     main()
