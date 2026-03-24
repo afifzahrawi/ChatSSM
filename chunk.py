@@ -13,6 +13,7 @@ class Chunk:
     embedding:          Optional[np.ndarray]    = field(default=None, compare=False, repr=False)
     relates_to_acts:    List[str]               = field(default_factory=list)  # e.g., ["Companies Act 2016", "LLP Act 2012"]
     language:           str                     = "en"
+    chunk_type:         str                     = "text"
 
 @dataclass
 class SearchResult:

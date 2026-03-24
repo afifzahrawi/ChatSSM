@@ -37,11 +37,15 @@ import os
 import pickle
 import re
 import threading
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
 from filelock import FileLock
+from rank_bm25 import BM25Okapi
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -52,6 +56,7 @@ import tempfile, shutil
 import csv
 
 from chunk import Chunk, SearchResult
+from memory_manager import MemoryManager
 
 # =============================================================================
 # LOGGING
@@ -106,30 +111,33 @@ class AppConfig:
     LLM_MAX_TOKENS:  int   = 1200
     LLM_TIMEOUT:     int   = 300    # seconds
     LLM_NUM_CTX: int = 6144   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
-    LLM_NUM_GPU:       int = int(os.environ.get("CHATSSM_LLM_NUM_GPU",       "-1"))
+    LLM_NUM_GPU:       int = int(os.environ.get("CHATSSM_LLM_NUM_GPU", "-1"))
 
     # ── Embedding ─────────────────────────────────────────────────────────────
-    EMBEDDING_TIMEOUT: int = 15     # seconds per call
+    EMBEDDING_TIMEOUT: int = 60     # seconds per call
     EMBEDDING_WORKERS: int = 4      # Parallel workers for index building.
     EMBEDDING_NUM_GPU: int = int(os.environ.get("CHATSSM_EMBEDDING_NUM_GPU", "-1"))
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
-    SIMILARITY_THRESHOLD: float = 0.45
+    SIMILARITY_THRESHOLD: float = 0.35
     TOP_K_PER_SOURCE:     int   = 4
-    GLOBAL_TOP_K:         int   = 8   # total chunks sent to LLM
+    GLOBAL_TOP_K:         int   = 12   # total chunks sent to LLM
     MAX_CHUNK_CHARS:     int   = 1200  # Truncate chunks in the prompt to this many characters to avoid hitting LLM token limits.
     MAX_TABLE_CHARS:  int = 2500
+    BM25_WEIGHT: float = 0.3  # 30% BM25, 70% vector — legal domain favors semantic
 
     # ── Paths ─────────────────────────────────────────────────────────────────
-    SOURCES_CONFIG:  str = "knowledge_sources.json"
+    SOURCES_CONFIG:  str = os.path.join("knowledge_base", "knowledge_sources.json")
     SOURCES_DIR:     str = os.path.join("knowledge_base", "sources")
     PROCESSED_DIR:   str = os.path.join("knowledge_base", "processed")
     CACHE_DIR:       str = os.path.join("knowledge_base", "embeddings")
+    FORMS_FILE:      str = os.path.join("knowledge_base", "forms.json")
     DATA_DIR:        str = "qa_data"
+    USER_DATA:       str = "user_data"
 
     @classmethod
     def ensure_dirs(cls) -> None:
-        for d in [cls.SOURCES_DIR, cls.PROCESSED_DIR, cls.CACHE_DIR, cls.DATA_DIR]:
+        for d in [cls.SOURCES_DIR, cls.PROCESSED_DIR, cls.CACHE_DIR, cls.DATA_DIR, cls.USER_DATA]:
             try:
                 os.makedirs(d, exist_ok=True)
             except OSError as exc:
@@ -138,10 +146,10 @@ class AppConfig:
 
 AppConfig.ensure_dirs()
 
-_CHAT_HISTORY_FILE = os.path.join(AppConfig.DATA_DIR, "chat_history.json")
 _QA_LOG_FILE       = os.path.join(AppConfig.DATA_DIR, "qa_log.csv")
 _FEEDBACK_FILE     = os.path.join(AppConfig.DATA_DIR, "feedback.json")
 _EMBEDDING_CACHE   = os.path.join(AppConfig.CACHE_DIR, "embedding_cache.pkl")
+_RESPONSE_CACHE_FILE = os.path.join(AppConfig.DATA_DIR, "response_cache.pkl")
 
 # =============================================================================
 # DATA CLASSES
@@ -181,6 +189,92 @@ _VALID_CATEGORIES: List[str] = [
 ]
 _VALID_DOC_TYPES: List[str] = ["act", "general", "faq", "gazette", "slide", "others"]
 
+# =============================================================================
+# QUERY ANALYZER
+# =============================================================================
+
+_CONTEXT_REF_RE = re.compile(
+    r'\b(it|its|this|that|these|those|they|them|their|'
+    r'the\s+(?:company|director|secretary|fee|deadline|section|act|'
+    r'provision|requirement|period|amount|penalty)|'
+    r'same|above|mentioned|previous|last|earlier)\b',
+    re.IGNORECASE,
+    )
+
+_CONTINUATION_RE = re.compile(
+    r'^(?:what\s+about|how\s+about|and\s+(?:what|how)|also|'
+    r'additionally|furthermore|can\s+it|does\s+it|is\s+it|'
+    r'yes\b|yes\s+please|yes\s+i\s+would|yes\s+i\s+want|'
+    r'sure\b|sure\s+please|okay\s+then|go\s+ahead|please\s+do|'
+    r'tell\s+me\s+more|i\s+would\s+like\s+to\s+know|please\s+explain)\b',
+    re.IGNORECASE,
+)
+
+_MALAY_MARKERS = re.compile(
+    r'\b(apakah|berapakah|bagaimana|bilakah|siapakah|mengapa|adakah|'
+    r'bolehkah|perlukah|syarikat|pengarah|pemegang\s+saham|pendaftaran|'
+    r'penubuhan|setiausaha|yuran|daftar|akta|peraturan|dan|atau|untuk|'
+    r'dengan|dalam|kepada|daripada|adalah|tidak|perlu|boleh|akan|telah|'
+    r'sebuah|seorang|semua|setiap|syarat|bayaran|penyata|tahunan|'
+    r'mesyuarat|resolusi|modal|saham|berhad|sdn\.?\s*bhd\.?|'
+    r'terangkan|jelaskan|apakah|beritahu|nyatakan|huraikan|'   # question starters
+    r'secara|talian|atas|bawah|cara|jenis|jika|kalau|'         # "secara atas talian" = online
+    r'seksyen|fasal|subseksyen|peruntukan|jadual|lampiran|'    # legal structural terms
+    r'ialah|iaitu|iaitu|bermaksud|merujuk|berkaitan|'          # definitional words
+    r'perlu|mesti|wajib|hendaklah|haruslah|dilarang|'   # modal/obligation verbs
+    r'juga|sahaja|hanya|selepas|sebelum|semasa|antara|'       # common function words
+    r'korporat|pengurusan|lembaga|ahli|pengurus|'    # corporate vocabulary
+    r'denda|penalti|kesalahan|hukuman|liabiliti|tanggungjawab|' # enforcement terms
+    r'lesen|permit|kelulusan|kebenaran|perakuan|sijil|'     # approval terms
+    r'mcm|mana|nak|tak|dah|lah|kan|pun|je|kot|bt|sbb|bisnes|bayar|kena|buat|macam|'
+    r'yang|tentang|mengenai|ada|apa|bila|ini|itu|saya|anda|dia|kita|mereka)\b',
+    re.IGNORECASE,
+)
+
+_GREETING_RE = re.compile(
+    r'^(?:hi+|hello+|hey+|good\s+(?:morning|afternoon|evening|day)|'
+    r'hai|helo|selamat\s+(?:pagi|tengahari|petang|malam|datang)|'
+    r'apa\s+khabar|assalamualaikum|salam)\W*$',
+    re.IGNORECASE,
+)
+
+_GREETING_RESPONSES = {
+    "en": (
+        "Hello! I'm ChatSSM, your legal assistant for Malaysian company law. "
+        "Feel free to ask me anything about the Companies Act, LLP Act, "
+        "business registration, or any other SSM-related matter."
+    ),
+    "ms": (
+        "Hai! Saya ChatSSM, pembantu undang-undang anda untuk undang-undang syarikat Malaysia. "
+        "Sila tanya saya apa-apa sahaja berkaitan Akta Syarikat, pendaftaran perniagaan, "
+        "atau sebarang perkara berkaitan SSM."
+    ),
+}
+
+def _detect_language(text: str) -> str:
+    """
+    Returns 'ms' (Malay), 'en' (English), or 'mixed'.
+
+    Uses three signals in priority order:
+    1. Malay-specific letter patterns that never appear in English
+    2. High-frequency Malay function words (short, common, colloquial)
+    3. Word-count ratio fallback
+    """
+    t = text.lower().strip()
+
+    words = re.findall(r"[a-zA-Z']+", t)
+    if not words:
+        return "en"
+
+    malay_hits = len(_MALAY_MARKERS.findall(t))
+    ratio = malay_hits / len(words)
+
+    # Lower threshold — catch short colloquial queries
+    if ratio >= 0.25:
+        return "ms"
+    elif ratio >= 0.10:
+        return "mixed"
+    return "en"
 
 def _filename_to_key(filename: str) -> str:
     stem = os.path.splitext(filename)[0]
@@ -349,6 +443,148 @@ class SourceRegistry:
             counts[s.category] = counts.get(s.category, 0) + 1
         return counts
 
+# =============================================================================
+# FORM REGISTRY
+# =============================================================================
+
+@dataclass
+class FormEntry:
+    form_id:          str
+    form_number:      str
+    name:             str
+    name_ms:          str
+    purpose:          str
+    purpose_ms:       str
+    url:              str
+    use_cases:        List[str]
+    related_sections: List[str]
+    category:         str
+    _embedding:       Optional[np.ndarray] = field(default=None, repr=False)
+
+    @property
+    def embed_text(self) -> str:
+        """Text used for semantic similarity — purpose + use cases."""
+        return f"{self.name}. {self.purpose}. " + " ".join(self.use_cases)
+
+
+class FormRegistry:
+    """
+    Loads SSM forms from forms.json and supports two retrieval modes:
+      1. Explicit — form number/keyword detected in query
+      2. Semantic  — embedding similarity against form purpose
+    """
+
+    # Explicit form request patterns
+    _EXPLICIT_RE = re.compile(
+        r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?|[A-Za-z][0-9]*)\b'
+        r'|\b(?:give|get|show|download|need|nak|minta|dapatkan)\s+(?:me\s+)?'
+        r'(?:the\s+)?(?:form|borang)\b',
+        re.IGNORECASE,
+    )
+    # Implicit intent patterns — procedural questions that usually require a form
+    _IMPLICIT_RE = re.compile(
+        r'\b(?:how\s+(?:to|do\s+I)|cara|nak|steps?\s+to|procedure\s+for|'
+        r'process\s+(?:to|for)|langkah|apply\s+for|daftar|register|submit|'
+        r'lodge|file|kemukakan|permohonan)\b',
+        re.IGNORECASE,
+    )
+
+    MAX_FORMS_EXPLICIT = 2
+    MAX_FORMS_IMPLICIT = 2
+    SEMANTIC_THRESHOLD = 0.60
+
+    def __init__(self, emb: "EmbeddingService") -> None:
+        self._emb   = emb
+        self._forms: List[FormEntry] = []
+        self._load()
+
+    def _load(self) -> None:
+        path = AppConfig.FORMS_FILE
+        if not os.path.exists(path):
+            logger.warning("forms.json not found at %s — form suggestions disabled.", path)
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            for d in data:
+                self._forms.append(FormEntry(**{
+                    k: v for k, v in d.items()
+                    if k in FormEntry.__dataclass_fields__
+                }))
+            logger.info("FormRegistry: loaded %d form(s).", len(self._forms))
+        except Exception as exc:
+            logger.error("FormRegistry: failed to load forms.json: %s", exc)
+
+    def _embed_forms(self) -> None:
+        """Lazily embed all forms on first semantic query."""
+        unembedded = [f for f in self._forms if f._embedding is None]
+        if not unembedded:
+            return
+        texts = [f.embed_text for f in unembedded]
+        vecs  = self._emb.embed_batch(texts)
+        for form, vec in zip(unembedded, vecs):
+            form._embedding = vec
+
+    def detect(
+        self,
+        query: str,
+        query_vec: Optional[np.ndarray] = None,
+    ) -> List[FormEntry]:
+        """
+        Return matched forms for a query.
+        Returns [] when no match or insufficient confidence.
+        """
+        if not self._forms:
+            return []
+
+        query_lower = query.lower()
+
+        # ── Mode 1: Explicit form request ─────────────────────────────────────
+        if self._EXPLICIT_RE.search(query):
+            # Try to match a specific form number
+            num_match = re.search(
+                r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?)', query, re.IGNORECASE
+            )
+            if num_match:
+                target = num_match.group(1).strip().lower()
+                exact = [
+                    f for f in self._forms
+                    if target in f.form_number.lower()
+                ]
+                if exact:
+                    return exact[:self.MAX_FORMS_EXPLICIT]
+
+            # Generic form request — fall through to semantic
+            pass
+
+        # ── Mode 2: Implicit intent — only if query has procedural language ───
+        if not self._IMPLICIT_RE.search(query):
+            return []   # query is not procedural — no form suggestion
+
+        if query_vec is None:
+            return []
+
+        self._embed_forms()
+
+        scored: List[Tuple[float, FormEntry]] = []
+        for form in self._forms:
+            if form._embedding is None:
+                continue
+            score = float(np.dot(query_vec, form._embedding))
+            if score >= self.SEMANTIC_THRESHOLD:
+                scored.append((score, form))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [f for _, f in scored[:self.MAX_FORMS_IMPLICIT]]
+
+    def reload(self) -> None:
+        self._forms.clear()
+        self._load()
+
+
+@st.cache_resource
+def _form_registry() -> FormRegistry:
+    return FormRegistry(_emb())
 
 # =============================================================================
 # EMBEDDING SERVICE  (RAM cache → disk cache → Ollama API)
@@ -664,11 +900,12 @@ class DocumentIndex:
         self._registry = registry
         self._chunks:  List[Chunk]          = []
         self._matrix:  Optional[np.ndarray] = None   # shape (N, D)
+        self._bm25:    Optional[object]     = None
 
     # ── Readiness ─────────────────────────────────────────────────────────────
 
     def is_ready(self) -> bool:
-        return self._matrix is not None and bool(self._chunks)
+        return self._matrix is not None and bool(self._chunks) and self._bm25 is not None
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
@@ -695,6 +932,11 @@ class DocumentIndex:
             chunk_text = f"{header}\n\n{content}" if header.strip(": ") else content
 
             src_entry = self._registry.get(self._key)
+            chunk_type = (
+                "visual" if "[VISUAL DESCRIPTION]" in chunk_text else
+                "table"  if "[TABLE]"               in chunk_text else
+                "text"
+            )
             raw.append(Chunk(
                 text             = chunk_text,
                 source_key       = self._key,
@@ -703,17 +945,32 @@ class DocumentIndex:
                 section          = section,
                 part             = part,
                 relates_to_acts  = src_entry.relates_to_acts if src_entry else [],
+                chunk_type       = chunk_type,
             ))
 
         return self._embed_and_build(raw)
 
     # ── Search ────────────────────────────────────────────────────────────────
 
-    def search(self, query_vec: np.ndarray) -> List[SearchResult]:
-        if self._matrix is None or not self._chunks:
-            return []
+    def search(self, query_vec: np.ndarray, query_text: str, lang: str = "en") -> List[SearchResult]:
+        # Raw cosine similarity — embeddings are unit-normalised so this is in [0, 1].
+        # Do NOT normalise by per-source max: that inflates every source's best chunk
+        # to 1.0 regardless of true relevance. With 83 sources all scoring ~1.0, the
+        # global top-8 merge becomes noise — irrelevant chunks crowd out good ones.
+        vector_scores = self._matrix @ query_vec
 
-        scores: np.ndarray = self._matrix @ query_vec   # shape (N,)
+        # BM25 is relative within a source, not absolute — normalise per source so
+        # it blends correctly with the absolute cosine scale.
+        # Use re.findall (same tokenizer as index build) so punctuation is stripped:
+        # "business?" → ["business"] not "business?" which has zero BM25 match.
+        tokens = re.findall(r'[a-z0-9]+', query_text.lower())
+        bm25_raw = np.array(self._bm25.get_scores(tokens), dtype=np.float32)
+        b_max = bm25_raw.max()
+        if b_max > 0:
+            bm25_raw = bm25_raw / b_max
+
+        w = 0.0 if lang == "ms" else AppConfig.BM25_WEIGHT
+        scores = (1 - w) * vector_scores + w * bm25_raw
 
         k   = min(AppConfig.TOP_K_PER_SOURCE * 3, len(scores))
         top = np.argpartition(scores, -k)[-k:]
@@ -741,7 +998,7 @@ class DocumentIndex:
         try:
             tmp = self._cache_path + ".tmp"
             with open(tmp, "wb") as fh:
-                pickle.dump({"version": 3, "chunks": self._chunks, "matrix": self._matrix}, fh)
+                pickle.dump({"version": 3, "chunks": self._chunks, "matrix": self._matrix, "bm25": self._bm25}, fh)
             try:
                 os.chmod(tmp, 0o600)
             except OSError:
@@ -767,8 +1024,16 @@ class DocumentIndex:
                 logger.warning("Index '%s' version mismatch. Rebuilding.", self._key)
                 self.delete_cache()
                 return False
+            
             self._chunks = payload["chunks"]
             self._matrix = payload["matrix"]
+
+            if "bm25" not in payload:
+                logger.warning("Index '%s' has no BM25 data (old cache). Rebuilding.", self._key)
+                self.delete_cache()
+                return False
+            self._bm25 = payload["bm25"]
+
             if self._matrix is None or len(self._chunks) != self._matrix.shape[0]:
                 logger.error(
                     "Index '%s' corrupted: %d chunks vs %d matrix rows. Deleting.",
@@ -801,7 +1066,8 @@ class DocumentIndex:
                 logger.info("    %d%% (%d / %d)", pct, done, tot)
                 last_pct[0] = pct
 
-        texts = [chunk.text for chunk in raw]
+        MAX_EMBED_CHARS = 2000
+        texts = [chunk.text[:MAX_EMBED_CHARS] for chunk in raw]
         vecs  = self._emb.embed_batch(texts, progress_cb=_progress)
 
         valid: List[Tuple[Chunk, np.ndarray]] = []
@@ -817,6 +1083,9 @@ class DocumentIndex:
         chunks_tuple, vs = zip(*valid)
         self._chunks = list(chunks_tuple)
         self._matrix = np.vstack(vs)
+        tokenized = tokenized = [re.findall(r'[a-z0-9]+', chunk.text.lower()) for chunk in self._chunks]
+        self._bm25 = BM25Okapi(tokenized)
+
         logger.info(
             "  Index ready: %d / %d chunks embedded for '%s'.",
             len(self._chunks), total, self._name,
@@ -917,6 +1186,9 @@ class KnowledgeBase:
         self._emb.clear_disk()
         logger.info("All indexes cleared.")
 
+    def _word_match(self, kw: str, text: str) -> bool:
+        return bool(re.search(r'\b' + re.escape(kw) + r'\b', text))
+
     def _detect_query_act(self, query: str) -> Optional[str]:
         """
         Detect which Act the user is asking about from their query.
@@ -950,10 +1222,7 @@ class KnowledgeBase:
         best_act: Optional[str] = None
         best_count = 0
         for act, keywords in act_keywords.items():
-            def _word_match(kw: str, text: str) -> bool:
-                return bool(re.search(r'\b' + re.escape(kw) + r'\b', text))
-            
-            matches = sum(1 for kw in keywords if _word_match(kw, query_lower))
+            matches = sum(1 for kw in keywords if self._word_match(kw, query_lower))
             if matches >= 2 and matches > best_count:
                 best_act   = act
                 best_count = matches
@@ -969,6 +1238,7 @@ class KnowledgeBase:
         query:         str,
         selected_keys: List[str],
         cat_filter:    Optional[List[str]] = None,
+        lang:          str = "en",
     ) -> Dict:
         """
         Embed the query, search all selected indexes, merge and rank results.
@@ -1001,7 +1271,7 @@ class KnowledgeBase:
         ) -> Tuple[str, List[Tuple[SearchResult, SourceEntry]]]:
             idx, source = args
             try:
-                hits = [(r, source) for r in idx.search(query_vec)]
+                hits = [(r, source) for r in idx.search(query_vec, query, lang)]
                 if hits:
                     logger.info("  Source '%s': %d results", source.name, len(hits))
                 return source.key, hits
@@ -1015,10 +1285,13 @@ class KnowledgeBase:
         hits_by_source: Dict[str, List[Tuple[SearchResult, SourceEntry]]] = {}
         _SEARCH_WORKERS = min(len(sources_to_search), 8)  # cap at 8; diminishing returns above this
         if sources_to_search:
-            with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as pool:
-                for key, hits in pool.map(_search_one, sources_to_search):
-                    if hits:
-                        hits_by_source[key] = hits
+            try:
+                with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as pool:
+                    for key, hits in pool.map(_search_one, sources_to_search):
+                        if hits:
+                            hits_by_source[key] = hits
+            except Exception as exc:
+                logger.error("Parallel search failed: %s. Returning empty results.", exc)
 
         all_hits: List[Tuple[SearchResult, SourceEntry]] = []
         for source_results in hits_by_source.values():
@@ -1029,16 +1302,19 @@ class KnowledgeBase:
         seen:          set                = set()
         chunks:        List[str]          = []
         chunk_sources: List[str]          = []
+        chunk_types:   List[str]          = []
         results:       List[SearchResult] = []
         citations:     List[str]          = []
         cats_hit:      List[str]          = []
 
         for result, source in all_hits:
-            if result.chunk.text in seen:
+            _text_hash = hashlib.md5(result.chunk.text.encode()).hexdigest()
+            if _text_hash in seen:
                 continue
-            seen.add(result.chunk.text)
+            seen.add(_text_hash)
             chunks.append(result.chunk.text)
             chunk_sources.append(source.name)
+            chunk_types.append(result.chunk.chunk_type)
             results.append(result)
             if source.name not in citations:
                 citations.append(source.name)
@@ -1050,6 +1326,7 @@ class KnowledgeBase:
         return {
             "chunks":         chunks,
             "chunk_sources":  chunk_sources,
+            "chunk_types":    chunk_types,
             "results":        results,
             "citations":      citations,
             "categories_hit": cats_hit,
@@ -1078,7 +1355,7 @@ class KnowledgeBase:
 def _empty() -> Dict:
     # BUG FIX: added chunk_sources so llm.generate() never KeyErrors
     return {
-        "chunks": [], "chunk_sources": [], "results": [],
+        "chunks": [], "chunk_sources": [], "chunk_types": [], "results": [],
         "citations": [], "categories_hit": [], "found": False,
     }
 
@@ -1188,6 +1465,127 @@ class FeedbackStore:
             "records":        records,
         }
 
+# =============================================================================
+# RESPONSE CACHE
+# =============================================================================
+
+class ResponseCache:
+    """
+    Cross-session LRU response cache. Shared across all Streamlit sessions
+    via @st.cache_resource. Thread-safe via a single RLock.
+
+    Key: md5(normalize(query) + sorted(selected_keys) + str(cat_filter))
+    Value: {response, citations, categories_hit, timestamp}
+
+    Cache is keyed on the NORMALIZED query + active source selection so
+    that users with different source filters get correct separate entries.
+    """
+    MAX_ENTRIES: int   = 500
+    TTL_SECONDS: float = 86400.0   # 24 hours — legal corpus changes infrequently
+
+    def __init__(self) -> None:
+        self._cache: OrderedDict = OrderedDict()
+        self._lock  = threading.RLock()
+        self._load()
+
+    @staticmethod
+    def _make_key(query: str, selected_keys: List[str],
+                cat_filter: Optional[List[str]],
+                lang: str = "en") -> str:
+        q = re.sub(r"\s+", " ", query.lower().strip()).rstrip("?.! ")
+        sources_str = ",".join(sorted(selected_keys))
+        cats_str    = ",".join(sorted(cat_filter)) if cat_filter else "all"
+        raw = f"{q}||{sources_str}||{cats_str}||{lang}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def get(self, query: str, selected_keys: List[str],
+            cat_filter: Optional[List[str]], lang: str = "en") -> Optional[Dict]:
+        key = self._make_key(query, selected_keys, cat_filter, lang)
+        with self._lock:
+            if key not in self._cache:
+                return None
+            entry = self._cache[key]
+            if time.time() - entry["timestamp"] > self.TTL_SECONDS:
+                del self._cache[key]
+                return None
+            # LRU: move to end
+            self._cache.move_to_end(key)
+            return entry
+
+    def put(self, query: str, selected_keys: List[str],
+            cat_filter: Optional[List[str]], response: str,
+            citations: List[str], categories_hit: List[str],
+            lang: str = "en") -> None:
+        key = self._make_key(query, selected_keys, cat_filter, lang)
+        with self._lock:
+            self._cache[key] = {
+                "response":       response,
+                "citations":      citations,
+                "categories_hit": categories_hit,
+                "timestamp":      time.time(),
+            }
+            self._cache.move_to_end(key)
+            while len(self._cache) > self.MAX_ENTRIES:
+                self._cache.popitem(last=False)  # evict oldest
+        self._save()
+
+    def invalidate(self) -> None:
+        """Call after a source is re-indexed to clear stale entries."""
+        with self._lock:
+            self._cache.clear()
+        if os.path.exists(_RESPONSE_CACHE_FILE):
+            os.remove(_RESPONSE_CACHE_FILE)
+
+    def invalidate_entry(self, cache_key: str) -> None:
+        """Remove one specific entry. Called when user rates a response 👎."""
+        with self._lock:
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+                logger.info("ResponseCache: evicted entry %s due to negative feedback.", cache_key[:12])
+        self._save()
+
+    def _save(self) -> None:
+        fd, tmp = None, None
+        try:
+            with self._lock:
+                data = dict(self._cache)
+            fd, tmp = tempfile.mkstemp(
+                dir=os.path.dirname(_RESPONSE_CACHE_FILE), suffix=".tmp"
+            )
+            with os.fdopen(fd, "wb") as fh:
+                fd = None
+                pickle.dump(data, fh)
+            shutil.move(tmp, _RESPONSE_CACHE_FILE)
+            tmp = None
+        except Exception as exc:
+            logger.warning("ResponseCache save failed: %s", exc)
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+            if tmp and os.path.exists(tmp):
+                try: os.unlink(tmp)
+                except OSError: pass
+
+    def _load(self) -> None:
+        if not os.path.exists(_RESPONSE_CACHE_FILE):
+            return
+        try:
+            with open(_RESPONSE_CACHE_FILE, "rb") as fh:
+                data = pickle.load(fh)
+            now = time.time()
+            with self._lock:
+                for k, v in data.items():
+                    if now - v.get("timestamp", 0) < self.TTL_SECONDS:
+                        cached_response = v.get("response", "")
+                        if not _OOS_PATTERN.search(cached_response):
+                            self._cache[k] = v
+        except Exception as exc:
+            logger.warning("ResponseCache load failed: %s", exc)
+
+
+@st.cache_resource
+def _response_cache() -> ResponseCache:
+    return ResponseCache()
 
 # =============================================================================
 # PROMPT OPTIMIZER
@@ -1317,7 +1715,7 @@ class ConversationMemory:
       - retrieve_long_term(): hook for MemoryIndex search (Phase 2)
     """
     MAX_RAW_TURNS:    int = 4     # turns kept verbatim
-    MAX_HIST_TOKENS:  int = 400   # hard token budget for history block
+    MAX_HIST_TOKENS:  int = 250   # hard token budget for history block
     REWRITE_THRESHOLD: int = 8    # queries shorter than this word count get rewritten
 
     _turns: List[Dict] = field(default_factory=list)
@@ -1338,10 +1736,17 @@ class ConversationMemory:
         search query using the last 2 turns as context.
         Returns the original input unchanged if no rewrite is needed.
         """
+        if not self._turns:
+            return user_input   # No history — nothing to resolve
         if len(user_input.split()) > self.REWRITE_THRESHOLD:
             return user_input   # Long queries are self-contained
-        if not self._turns:
-            return user_input   # No history to reference
+
+        needs_rewrite = (
+            _CONTEXT_REF_RE.search(user_input) is not None
+            or _CONTINUATION_RE.match(user_input.strip()) is not None
+        )
+        if not needs_rewrite:
+            return user_input   # Short but self-contained — skip LLM call
 
         recent = self._turns[-2:]
         history_text = "\n".join(
@@ -1359,7 +1764,8 @@ class ConversationMemory:
             rewritten = "".join(llm_service._call(rewrite_prompt, system="")).strip()
             # Strip any think blocks or preamble the model adds
             rewritten = re.sub(r"<think>.*?</think>", "", rewritten, flags=re.DOTALL).strip()
-            if rewritten and 3 < len(rewritten) < 200:
+            
+            if rewritten and 3 < len(rewritten) < 200 and not rewritten.startswith("❌"):
                 logger.info("Query rewritten: '%s' → '%s'", user_input, rewritten)
                 return rewritten
         except Exception as exc:
@@ -1384,9 +1790,9 @@ class ConversationMemory:
 
         block = (
             "<<CONVERSATION HISTORY>>\n"
-            "Use ONLY to resolve references ('it', 'that', 'the fee', etc.).\n"
+            "Use ONLY to resolve references ('it', 'that', etc.).\n"
             "Do NOT answer from history. Answer only from CONTEXT below.\n"
-            "─" * 40 + "\n"
+            + "─" * 40 + "\n"
             + "\n\n".join(lines)
             + "\n" + "─" * 40 + "\n\n"
         )
@@ -1407,19 +1813,38 @@ class ConversationMemory:
         amounts = re.findall(r"RM\s?[\d,]+(?:\.\d{2})?", response)
         # Extract day/month counts
         deadlines = re.findall(r"\d+\s+(?:days?|months?|years?)", response)
-        # First sentence of response (the direct answer)
-        first_sent = response.split(".")[0].strip()[:150]
+
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', response) if s.strip()]
+        first_sent = sentences[0][:150] if sentences else ""
+        last_sent  = sentences[-1][:150] if len(sentences) > 1 else "" 
 
         facts = sections[:3] + amounts[:2] + deadlines[:2]
         summary = first_sent
         if facts:
             summary += f" [{', '.join(facts)}]"
-        return summary[:300]
+        if last_sent and last_sent != first_sent: 
+            summary += f" | {last_sent}"  
+        return summary[:400] 
 
 # =============================================================================
 # LLM SERVICE
 # =============================================================================
+_SSM_WRONG_RE = re.compile(
+    r'Jabatan\s+(?:Kebangsaan\s+)?Pendaftaran\s+Syarikat'
+    r'|Jabatan\s+Syarikat'
+    r'|Suruhanjaya\s+Pendaftaran\s+Syarikat'
+    r'|Jabatan\s+Kebangsaan\s+Syarikat',
+    re.IGNORECASE,
+)
 
+_OOS_PATTERN = re.compile(
+    r"(I couldn't find this in (?:the documents I have access to|what I have access to|my knowledge base)"
+    r"|(?:the\s+)?(?:documents|information)\s+(?:I\s+have\s+access\s+to|available\s+to\s+me)"
+    r"|Saya tidak dapat menemui maklumat ini"
+    r"|Saya tidak menjumpai maklumat ini"
+    r"|tidak terdapat dalam pengetahuan saya)",
+    re.IGNORECASE,
+)
 
 class LLMService:
     """
@@ -1432,59 +1857,178 @@ You are a knowledgeable and approachable legal assistant for Suruhanjaya Syarika
 Your role is to help users understand Malaysian company law in a clear, conversational way —
 as if a senior corporate secretary is explaining it to a colleague over a desk.
 
+==================================================
 ACCURACY RULES  —  NON-NEGOTIABLE
+==================================================
 
-RULE 1 — STAY WITHIN THE CONTEXT
-  • Every factual statement MUST come from the CONTEXT block below.
-  • Do NOT add information from your general training knowledge.
-  • If the answer is not in the CONTEXT, say so clearly (see Rule 5).
+RULE 1 — ANSWER FROM THE CONTEXT
+  • Every factual statement MUST be supported by the CONTEXT block.
+  • Scan ALL chunks before answering — do not stop at the first relevant one.
+  • If the answer is spread across multiple chunks, combine them into one
+    complete explanation.
+  • Do NOT require exact keyword match. Use related concepts and indirect
+    references — if a chunk is relevant to the question, use it.
 
-RULE 2 — CITE EVERYTHING
-  • After every factual statement, cite the source in bold.
-  • Format: **(Section 14(1), Companies Act 2016)** or **(Practice Note 3/2018, para 8)**
-  • Never make a factual claim without a citation immediately after it.
+RULE 2 — LOGICAL SYNTHESIS (strictly bounded)
+  • You MAY connect facts that are BOTH explicitly stated in the CONTEXT.
+    Example: If Chunk A says "the form must be submitted" and Chunk B says
+    "the fee is RM1,000", you may state both as part of the same procedure.
+  • You MAY NOT fill in missing facts from your training knowledge.
+    Example: If the fee amount is NOT in any chunk, do not state it.
+  • The test: every specific fact, number, name, and deadline in your answer
+    must be traceable to a specific chunk in the CONTEXT.
 
-RULE 3 — EXACT NUMBERS, DATES AND THRESHOLDS
-  • Copy every number, deadline, ringgit amount, and percentage exactly as it appears
-    in the CONTEXT. Do not round, approximate, or paraphrase these.
+RULE 3 — CITE EVERYTHING
+  • After every factual claim, cite the source in bold using the correct format for that document type:
+    - Acts and Regulations:
+      **(Section 14(1), Companies Act 2016)**
+      **(Regulation 7, Companies Regulations 2017)**
+    - Practice Notes and Practice Directives:
+      **(Practice Note 3/2018, para 8)**
+      **(Practice Directive 7/2020, para 3.1)**
+    - Guidelines and Circulars:
+      **(para 5.2, Guidelines on Company Names)**
+      **(para 3, Circular No. 2/2021)**
+    - FAQs:
+      **(Q14, FAQs on Companies (Amendment) Act 2024)**
+      **(Q3, FAQs on Annual Return)**
+    - Forms and Schedules:
+      **(Item 4, Schedule 1, Companies Regulations 2017)**
+  • General rule: cite by the document's own numbering system.
+  • Never apply "Section" to a document that is not an Act or Regulation.
+  • Never apply "para" to a document that uses Q&A numbering.
+  • If you are unsure of the exact reference, cite the document name only:
+    **(FAQs on Companies (Amendment) Act 2024)**
+  • You may group a citation at the end of a paragraph when the whole
+    paragraph draws from one source.
+  • Never make a factual claim without a citation.
 
-RULE 4 — LEGAL TERMS
-  • Reproduce defined legal terms (e.g. "beneficial owner", "lodgement") exactly as written.
-  • Paraphrasing legal definitions changes their legal meaning — never do this.
+RULE 4 — EXACT NUMBERS AND LEGAL TERMS
+  • Copy every number, deadline, ringgit amount, and percentage exactly as
+    it appears in the CONTEXT. Never round, approximate, or paraphrase.
+  • Reproduce defined legal terms exactly as written. Paraphrasing legal
+    definitions changes their legal meaning.
 
 RULE 5 — OUT OF SCOPE
-  • If the CONTEXT does not contain enough information to answer the question, respond:
-    "I couldn't find this in the documents I have access to. For this specific question,
+  • Use this response ONLY when NO chunk in the CONTEXT contains any
+    information relevant to the question — not even indirectly.
+  • If partial information exists: answer using what is available, then add
+    one sentence: "For the complete details, I'd recommend checking directly
+    with SSM or consulting a licensed company secretary."
+  • If truly no relevant information exists, say EXACTLY in the user's language:
+    - English: "I couldn't find this in my knowledge base. For this specific question,
     I'd recommend checking directly with SSM or consulting a licensed company secretary."
-  • Never speculate or infer beyond what is explicitly stated.
+    - Malay: "Saya tidak menemui maklumat ini dalam pangkalan pengetahuan saya. Untuk soalan
+    ini, saya mengesyorkan anda semak terus dengan Suruhanjaya Syarikat Malaysia (SSM)
+    atau berunding dengan setiausaha syarikat berlesen."
+  • Use the Malay phrase when the user wrote in Malay.
+  • After that sentence, STOP completely.
 
-TONE AND FORMAT RULES
+==================================================
+PARTIAL ANSWER PROTOCOL
+==================================================
 
-TONE — Write in a warm, natural, professional tone:
-  • Use plain English where possible, then introduce the legal term.
-    Example: "The deadline to file (called the 'lodgement period') is 30 days..."
-  • Address the user directly using "you" and "your company".
-  • Avoid sounding like a legal statute. Explain it, then cite it.
+  When you can answer PART of a question from the CONTEXT but not all:
+  1. Answer the parts you have, citing each clearly.
+  2. For the missing parts, say: "The [specific detail] is not in my
+     knowledge base — please confirm this with SSM directly."
+  3. Do NOT use the full out-of-scope response for partial gaps.
 
-FORMAT — Choose the structure that fits the answer:
-  • Short factual questions → 1-5 paragraph prose answer with inline citations.
-  • Step-by-step procedures → numbered list, one step per item.
-  • Comparing two things   → short table or two labelled paragraphs.
-  • Do NOT use bullet points, headers, or bold text just to look structured.
-    Use them only when they genuinely make the answer clearer.
+==================================================
+VISUAL CONTENT RULE
+==================================================
 
-OPENING — Start with a direct answer to the question, not a preamble.
+  • Sources labeled [VISUAL CONTENT] contain AI-generated descriptions of
+    diagrams or charts. Treat them as factual. Cite as:
+    "(diagram/figure, [source name])".
+
+==================================================
+USER MEMORY RULE
+==================================================
+
+  • If a <<USER MEMORY>> block is present, apply it to tone, format, and
+    language ONLY.
+  • Never use memory to answer legal questions.
+  • CONTEXT always overrides memory.
+
+==================================================
+TONE AND FORMAT
+==================================================
+
+TONE:
+  • Warm, natural, professional — like a senior corporate secretary
+    explaining to a colleague.
+  • Use plain language first, then introduce the legal term.
+    Example: "The filing deadline (called the 'lodgement period') is 30 days..."
+  • Address the user as "you" and "your company".
+
+FORMAT:
+  • Short factual questions → prose answer, 1-5 paragraphs, inline citations.
+  • Procedures → numbered list, one step per item, citation after each step.
+  • Comparisons → short table or two clearly labelled paragraphs.
+  • Use structure only when it genuinely helps. Do not add headers or bullets
+    just to look organised.
+
+COMPARISON QUESTIONS ("apa beza", "what is the difference", "compare"):
+  1. First sentence states the core difference directly.
+  2. Explain each concept in 2–4 sentences.
+  3. Table or labelled paragraphs.
+  4. One-sentence practical guidance at the end.
+
+CONCISENESS:
+  • Answer only what was asked.
+  • Do not pad with summaries, preambles, or trailing remarks.
+  • Do not offer follow-up suggestions unless X appears in the CONTEXT.
+  • If you answered the question fully, stop.
+
+OPENING:
+  • Start with the direct answer. Never start with "According to the CONTEXT..."
   • Good: "Yes, a private company must file its annual return within 30 days..."
-  • Bad:  "According to the CONTEXT provided, I will now explain the requirements..."
+  • Bad:  "Based on the information available, I will now explain..."
 
-CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer" 
-  unless the question is genuinely outside the documents (Rule 5).
+==================================================
+SSM IDENTITY — NON-NEGOTIABLE
+==================================================
+
+  • Full name in English: "Companies Commission of Malaysia (SSM)"
+  • Full name in Malay:   "Suruhanjaya Syarikat Malaysia (SSM)"
+  • Never use invented names like "Jabatan Pendaftaran Syarikat".
+
+==================================================
+INTERNAL LABELS — NEVER VISIBLE TO USERS
+==================================================
+
+  • Never write CONTEXT, CONTEXT_BLOCK, SOURCE, or [SOURCE: ...] in your
+    response. These are internal labels.
+  • When referring to your information source, say "my knowledge base" or
+    cite by document name (e.g. "Companies Act 2016").
+
+==================================================
+LANGUAGE
+==================================================
+
+  • Respond in the same language the user wrote in.
+  • Malay query → full Malay response.
+  • English query → full English response.
+  • Mixed query → English response, Malay legal terms acceptable.
+  • Never switch language mid-response.
+  • Citation language matches your response language:
+    - Malay response: "Seksyen 14(1), Akta Syarikat 2016"
+    - English response: "Section 14(1), Companies Act 2016"
+
+==================================================
+CLOSING
+==================================================
+
+  • End naturally when you have answered the question.
+  • Only add "consult SSM" if the answer is partially or fully out of scope.
+  • Do not add legal disclaimers at the end of complete answers.
 """
 
     def generate(self, query, context_chunks, citations=None, prompt_patches="", detected_act=None):
         if not context_chunks:
             return (
-                "No relevant sections were found in the selected knowledge sources. "
+                "No relevant sections were found in the my knowledge base. "
                 "Please rephrase your question, enable more sources, or consult a "
                 "licensed professional."
             )
@@ -1525,7 +2069,7 @@ CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer"
         return self._postprocess(raw)
 
     @staticmethod
-    def _postprocess(text: str) -> str:
+    def _postprocess(text: str, lang: str = "en") -> str:
         if (text.startswith("❌") or text.startswith("No relevant sections") or text.startswith("This information is not found")):
             return text
 
@@ -1536,7 +2080,43 @@ CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer"
         )
 
         text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r'\bthe\s+CONTEXT\s+provided\b',                  'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'\bthe\s+CONTEXT\s+above\b',                     'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'\bthe\s+CONTEXT\s+block\b',                     'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'\bthe\s+CONTEXT\b',                             'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'\bthis\s+CONTEXT\b',                            'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'\bin\s+the\s+CONTEXT\b',                        'in my knowledge base',   text, flags=re.IGNORECASE)
+        text = re.sub(r'\bCONTEXT\b',                                   'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'(?:in\s+)?(?:the\s+)?documents\s+I\s+have\s+access\s+to', 'my knowledge base', text, flags=re.IGNORECASE)
+        text = re.sub(r'what\s+I\s+have\s+access\s+to',                 'my knowledge base',      text, flags=re.IGNORECASE)
+        text = re.sub(r'information\s+available\s+to\s+me',              'my knowledge base',      text, flags=re.IGNORECASE)
         text = text.strip()
+
+        if lang == "ms":
+            text = re.sub(
+                r"I couldn't find this in my knowledge base\.",
+                "Saya tidak menemui maklumat ini dalam pangkalan pengetahuan saya.",
+                text, flags=re.IGNORECASE,
+            )
+            text = re.sub(
+                r"For this specific question,\s*I(?:'d| would) recommend checking directly "
+                r"with SSM or consulting a licensed company secretary\.",
+                "Untuk soalan ini, saya mengesyorkan anda semak terus dengan "
+                "Suruhanjaya Syarikat Malaysia (SSM) atau berunding dengan setiausaha syarikat berlesen.",
+                text, flags=re.IGNORECASE,
+            )
+
+        # Preserve surrounding context — replace with correct name but keep "(SSM)" if already present
+        text = _SSM_WRONG_RE.sub('Suruhanjaya Syarikat Malaysia', text)
+
+        oos_match = _OOS_PATTERN.search(text)
+        if oos_match and oos_match.start() < 80:
+            first_end = text.find('.', oos_match.start())
+            if first_end != -1:
+                # Rule 5 has two sentences — preserve both, discard anything after
+                second_end = text.find('.', first_end + 1)
+                cut = second_end if second_end != -1 else first_end
+                text = text[:cut + 1].strip()
 
         # Detect truncation
         if text and not re.search(r"[.!?)\]`*|\-\w]\s*$", text, re.IGNORECASE):
@@ -1548,7 +2128,16 @@ CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer"
 
         return text
 
-    def _call(self, prompt: str, system: str="") -> Generator[str, None, None]:
+    def _call(self, prompt: str, system: str="", temp_override: Optional[float] = None) -> Generator[str, None, None]:
+        # Compute minimum sufficient context window — reduces KV-cache fill time
+        _estimated_input_tokens = (len(prompt) + len(system)) // 4
+        _adaptive_ctx = max(
+            2048,
+            min(
+                ((_estimated_input_tokens + AppConfig.LLM_MAX_TOKENS + 400 + 511) // 512) * 512,
+                8192,
+            ),
+        )
         try:
             r = requests.post(
                 f"{AppConfig.OLLAMA_BASE_URL}/api/generate",
@@ -1557,12 +2146,13 @@ CLOSING — End naturally. Do not add disclaimers like "please consult a lawyer"
                     "prompt": prompt,
                     "system": system,
                     "stream": True,
+                    "keep_alive": -1,
                     "options": {
-                        "temperature": AppConfig.LLM_TEMPERATURE,
+                        "temperature": temp_override if temp_override is not None else AppConfig.LLM_TEMPERATURE,
                         "top_p":       AppConfig.LLM_TOP_P,
                         "top_k":       AppConfig.LLM_TOP_K,
                         "num_predict": AppConfig.LLM_MAX_TOKENS,
-                        "num_ctx":     AppConfig.LLM_NUM_CTX,
+                        "num_ctx":     _adaptive_ctx,
                         "repeat_penalty": 1.0,
                         "num_gpu":        AppConfig.LLM_NUM_GPU,
                         "stop":        ["<<USER_QUESTION>>", "<<CONTEXT_BLOCK>>"],
@@ -1646,8 +2236,8 @@ class CacheBuilder:
 
         progress_container = st.container()
         with progress_container:
-            st.markdown("### ⏳ Initializing Knowledge Base (First Time Only)")
-            st.info("This takes 1–2 minutes on first run, then everything is cached.")
+            st.markdown("### ⏳ Initializing Knowledge Base")
+            st.info("This takes 30 minutes or more depending on knowledge size")
 
             progress_bar = st.progress(0)
             status_text  = st.empty()
@@ -1675,8 +2265,22 @@ class CacheBuilder:
             progress_container.empty()
             st.success("✅ Knowledge base ready!")
 
+        CacheBuilder._warmup_llm()
         return True
 
+    @staticmethod
+    def _warmup_llm() -> None:
+        """Pre-load the LLM into RAM before the first user query."""
+        try:
+            requests.post(
+                f"{AppConfig.OLLAMA_BASE_URL}/api/generate",
+                json={"model": AppConfig.LLM_MODEL, "prompt": "hi",
+                    "stream": False, "options": {"num_predict": 1}},
+                timeout=60,
+            )
+            logger.info("LLM warmed up and ready.")
+        except Exception:
+            pass 
 
 # =============================================================================
 # STORAGE SERVICE
@@ -1686,25 +2290,30 @@ _qa_log_lock = threading.Lock()
 
 class StorageService:
     """Thin I/O layer: chat history (JSON) + Q&A log (CSV)."""
+    @staticmethod
+    def _history_file(uid: str) -> str:
+        return os.path.join(AppConfig.USER_DATA, f"chat_{uid[:16]}.json")
 
     @staticmethod
-    def load_history() -> List[Dict]:
+    def load_history(uid: str) -> List[Dict]:
+        path = StorageService._history_file(uid)
         try:
-            if os.path.exists(_CHAT_HISTORY_FILE):
-                with open(_CHAT_HISTORY_FILE, "r", encoding="utf-8") as fh:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as fh:
                     return json.load(fh)
         except Exception as exc:
             logger.error("Load history failed: %s", exc)
         return []
 
     @staticmethod
-    def save_history(history: List[Dict]) -> None:
-        tmp_path = _CHAT_HISTORY_FILE + ".tmp"
+    def save_history(history: List[Dict], uid: str) -> None:
+        path = StorageService._history_file(uid)
+        tmp_path = path + ".tmp"
         try:
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 history_to_save = history[-200:]
                 json.dump(history_to_save, fh, indent=2, default=str, ensure_ascii=False)
-            shutil.move(tmp_path, _CHAT_HISTORY_FILE)
+            shutil.move(tmp_path, path)
         except Exception as exc:
             logger.error("Save history failed: %s", exc)
             try:
@@ -1802,7 +2411,6 @@ def _feedback_store() -> FeedbackStore:
 def _optimizer() -> PromptOptimizer:
     return PromptOptimizer(_feedback_store())
 
-
 # =============================================================================
 # UTILITIES
 # =============================================================================
@@ -1822,6 +2430,43 @@ def _ollama_ok() -> bool:
 def _make_qa_id(query: str, timestamp: str) -> str:
     """Short deterministic ID for a Q&A exchange."""
     return hashlib.md5(f"{query}{timestamp}".encode()).hexdigest()[:12]
+
+def _get_persistent_user_id() -> str:
+    """
+    Returns a stable user ID that survives browser restarts.
+    On first visit: generates a UUID and writes it to the URL.
+    On return visits: reads it back from the URL.
+    Users who bookmark their URL keep their preferences permanently.
+    """
+    params = st.query_params
+    if "uid" in params:
+        uid = params["uid"]
+        # Validate it looks like a UUID (security: reject injected values)
+        if re.match(r'^[a-f0-9\-]{32,36}$', uid):
+            return uid
+
+    # First visit — generate and write to URL
+    new_uid = str(uuid.uuid4())
+    st.query_params["uid"] = new_uid
+    return new_uid
+
+def _get_session_id() -> str:
+    """
+    Return a stable session ID for the current browser tab.
+    Uses Streamlit's internal session context when available,
+    falls back to a UUID stored in session_state.
+    """
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        ctx = get_script_run_ctx()
+        if ctx and ctx.session_id:
+            return ctx.session_id
+    except Exception:
+        pass
+    # Fallback: generate once and persist in session_state
+    if "_session_uuid" not in st.session_state:
+        st.session_state["_session_uuid"] = str(uuid.uuid4())
+    return st.session_state["_session_uuid"]
 
 
 # =============================================================================
@@ -1954,14 +2599,140 @@ _CSS = """
     margin: 6px 0;
 }
 
-.fb-submitted {
+/* ── Chat input sizing ───────────────────────────────────────────── */
+[data-testid="stBottom"] {
+    width: 100% !important;
+    max-width: 1000px !important;   /* match your .block-container max-width */
+    margin: 0 auto !important;
+    left: 0 !important;
+    right: 0 !important;
+    padding: 0 36px !important;    /* match your .block-container side padding */
+    box-sizing: border-box !important;
+}
+
+[data-testid="stBottom"] > div {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+[data-testid="stChatInput"] {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+[data-testid="stChatInput"] textarea {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-height: 54px;
+    max-height: 200px;
+    font-size: 0.95rem;
+    padding: 14px 16px;
+    border-radius: 12px;
+}
+
+/* ── Send button — Claude style ──────────────────────────────────── */
+
+button[data-testid="stChatInputSubmitButton"] {
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 8px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background-color: #e0e0e0 !important;
+    border: none !important;
+    cursor: not-allowed !important;
+    transition: background-color 0.15s ease, transform 0.1s ease !important;
+}
+
+button[data-testid="stChatInputSubmitButton"] svg {
+    width: 16px !important;
+    height: 16px !important;
+    fill: #9e9e9e !important;
+    transition: fill 0.15s ease !important;
+}
+
+button[data-testid="stChatInputSubmitButton"]:enabled {
+    background-color: #10a37f !important;
+    cursor: pointer !important;
+}
+
+button[data-testid="stChatInputSubmitButton"]:enabled svg {
+    fill: #ffffff !important;
+}
+
+button[data-testid="stChatInputSubmitButton"]:enabled:hover {
+    background-color: #0d9268 !important;
+    transform: scale(1.08) !important;
+}
+
+button[data-testid="stChatInputSubmitButton"]:enabled:active {
+    transform: scale(0.95) !important;
+}
+
+/* ── Inline feedback bar ─────────────────────────────────────── */
+.fb-hr {
+    border: none;
+    border-top: 1px solid rgba(0,0,0,0.07);
+    margin: 10px 0 4px 0;
+}
+
+/* Icon buttons — strip Streamlit default styling inside chat messages */
+[data-testid="stChatMessageContent"] [data-testid="stBaseButton-secondary"],
+[data-testid="stChatMessageContent"] [data-testid="baseButton-secondary"] {
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 8px !important;
+    color: #9e9e9e !important;
+    font-size: 1rem !important;
+    padding: 2px 9px !important;
+    min-height: 30px !important;
+    height: 30px !important;
+    line-height: 1 !important;
+    box-shadow: none !important;
+    transition: background 0.15s, border-color 0.15s, color 0.15s !important;
+}
+[data-testid="stChatMessageContent"] [data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stChatMessageContent"] [data-testid="baseButton-secondary"]:hover {
+    background: rgba(0,0,0,0.06) !important;
+    border-color: #d0d0d0 !important;
+    color: #333 !important;
+}
+
+/* Confirmed state pill */
+.fb-done {
+    display: inline-block;
+    font-size: 0.8rem;
+    border-radius: 20px;
+    padding: 3px 10px;
+    margin-top: 2px;
+}
+.fb-done-up {
     background: #f0fdf4;
-    border: 1px solid #86efac;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 0.85rem;
     color: #166534;
-    margin-top: 6px;
+    border: 1px solid #86efac;
+}
+.fb-done-dn {
+    background: #fff3f3;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+}
+
+/* ── Suppress Streamlit's rerun dark-flash overlay ─────────────── */
+.stApp[data-stale],
+.stApp[data-stale="true"],
+[data-stale],
+[data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
+}
+._stCoreOverlay {
+    display: none !important;
+}
+/* Optional: also hide the bottom-right "running" spinner */
+[data-testid="stStatusWidget"] {
+    display: none !important;
 }
 </style>
 """
@@ -1980,13 +2751,14 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
     kb       = _kb()
     emb      = _emb()
     store    = _store()
+    uid = _get_persistent_user_id()
 
     with st.sidebar:
         st.markdown("## ⚖️ ChatSSM")
 
         if st.button("➕ New Chat", use_container_width=True):
             st.session_state["chat_history"] = []
-            store.save_history([])
+            store.save_history([], uid)
             st.rerun()
 
         st.divider()
@@ -2056,9 +2828,8 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
                 continue
 
             icon     = CATEGORY_ICONS.get(cat, "📁")
-            expanded = (cat == "Legislations")
 
-            with st.expander(f"{icon} {cat}  ({len(srcs)})", expanded=expanded):
+            with st.expander(f"{icon} {cat}  ({len(srcs)})", expanded=False):
                 all_in = st.checkbox("Select all", value=True, key=f"selall_{cat}")
 
                 for src in srcs:
@@ -2139,6 +2910,10 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
                 st.success("All cleared. Indexes rebuild on next query.")
 
         st.divider()
+
+        if st.button("🗑️ Clear response cache"):
+            _response_cache().invalidate()
+            st.success("Response cache cleared.")
 
         # ── External links ─────────────────────────────────────────────────
         c1, c2 = st.columns(2)
@@ -2235,6 +3010,33 @@ def _header() -> None:
             unsafe_allow_html=True,
         )
 
+def _render_form_cards(forms: List[FormEntry], lang: str = "en") -> None:
+    """Render compact form suggestion cards below the LLM answer."""
+    if not forms:
+        return
+
+    label = "📋 Borang Berkaitan" if lang == "ms" else "📋 Relevant Forms"
+    st.markdown(f"<div style='margin-top:12px;'><small><b>{label}</b></small></div>",
+                unsafe_allow_html=True)
+
+    for form in forms:
+        name    = form.name_ms    if lang == "ms" else form.name
+        purpose = form.purpose_ms if lang == "ms" else form.purpose
+
+        with st.container(border=True):
+            col_info, col_btn = st.columns([5, 1])
+            with col_info:
+                st.markdown(
+                    f"**📄 {form.form_number}** — {name}\n\n"
+                    f"<small style='color:#666'>{purpose}</small>",
+                    unsafe_allow_html=True,
+                )
+            with col_btn:
+                st.link_button(
+                    "📥" if lang == "ms" else "📥",
+                    url=form.url,
+                    help=f"Download {form.form_number}",
+                )
 
 def _render_messages() -> None:
     history = st.session_state.get("chat_history", [])
@@ -2261,155 +3063,148 @@ def _render_messages() -> None:
             f'<div class="mu"><div class="b">{html.escape(msg.get("query", ""))}</div></div>',
             unsafe_allow_html=True,
         )
+        qa_id = msg.get("qa_id") or _make_qa_id(msg.get("query", ""), msg.get("timestamp", ""))
         with st.chat_message("assistant", avatar="⚖️"):
             st.markdown(msg.get("response", "*(no response recorded)*"))
+            if msg.get("forms"):
+                forms_from_history = [
+                    FormEntry(
+                        form_id="", form_number=f["form_number"], name=f["name"],
+                        name_ms=f["name_ms"], purpose=f["purpose"],
+                        purpose_ms=f["purpose_ms"], url=f["url"],
+                        use_cases=[], related_sections=[], category="",
+                    )
+                    for f in msg["forms"]
+                ]
+                _render_form_cards(forms_from_history, lang="en")
             cats = msg.get("categories_hit", [])
             if cats:
                 badge_html = " ".join(
                     f'<span class="badge">{html.escape(c)}</span>' for c in cats
                 )
                 st.markdown(badge_html, unsafe_allow_html=True)
+            _render_inline_feedback(msg, qa_id)
 
 
-def _render_feedback(latest: Dict) -> None:
-    """
-    Render the feedback panel for the most recent Q&A exchange.
-
-    Features:
-    - 👍 / 😐 / 👎 quick rating buttons
-    - On 👎: shows failure-type dropdown + optional comment box
-    - Double-submit guard via session state key per qa_id
-    - Download button for the response text
-    """
+def _submit_feedback(
+    msg: Dict,
+    qa_id: str,
+    rating: int,
+    failure_key: Optional[str],
+    comment: str,
+    vote: str,          # "up" or "down"
+) -> None:
+    """Save feedback, optionally evict the cache entry, update session state."""
     fb_store = _feedback_store()
     store    = _store()
+    rc       = _response_cache()
 
-    qa_id     = latest.get("qa_id", "unknown")
+    fb_store.save(
+        qa_id        = qa_id,
+        query        = msg.get("query", ""),
+        response     = msg.get("response", ""),
+        citations    = msg.get("citations", []),
+        rating       = rating,
+        failure_type = failure_key,
+        comment      = comment,
+    )
+    store.log_qa(
+        msg.get("query", ""), msg.get("response", ""),
+        msg.get("citations", []), rating, qa_id,
+    )
+    # Evict incorrect cached answer so next ask re-generates a fresh response
+    if rating <= 2 and msg.get("cache_key"):
+        rc.invalidate_entry(msg["cache_key"])
+
+    st.session_state[f"fb_vote_{qa_id}"]     = vote
+    st.session_state[f"fb_submitted_{qa_id}"] = True
+    st.session_state.pop(f"fb_pending_{qa_id}", None)
+    st.rerun()
+
+
+def _render_inline_feedback(msg: Dict, qa_id: str) -> None:
+    """
+    Render thumbs-up / thumbs-down feedback bar inline inside a chat bubble.
+
+    States:
+      • Default   → 👍  👎  📥  (icon buttons, borderless)
+      • 👎 clicked → failure-type dropdown + Submit / Skip
+      • Submitted  → green or red confirmation pill
+    """
     submitted_key = f"fb_submitted_{qa_id}"
     pending_key   = f"fb_pending_{qa_id}"
 
-    with st.expander("📋 Rate this response & Export", expanded=False):
+    st.markdown('<hr class="fb-hr">', unsafe_allow_html=True)
 
-        # ── Already submitted guard ────────────────────────────────────────
-        if st.session_state.get(submitted_key):
+    # ── Already submitted ──────────────────────────────────────────────────
+    if st.session_state.get(submitted_key):
+        vote = st.session_state.get(f"fb_vote_{qa_id}", "up")
+        if vote == "up":
             st.markdown(
-                '<div class="fb-submitted">✅ Feedback submitted — thank you!</div>',
+                '<span class="fb-done fb-done-up">👍&nbsp; Helpful</span>',
                 unsafe_allow_html=True,
             )
-        elif st.session_state.get(pending_key) == "negative_form":
-            # ── Negative feedback form ─────────────────────────────────────
-            st.markdown("**What went wrong?** *(optional details help improve the system)*")
-
-            failure_label = st.selectbox(
-                "Failure type",
-                options=list(FeedbackStore.FAILURE_TYPES.values()),
-                key=f"fb_ft_{qa_id}",
-            )
-            # Map label back to key
-            failure_key = next(
-                k for k, v in FeedbackStore.FAILURE_TYPES.items()
-                if v == failure_label
-            )
-
-            comment = st.text_area(
-                "Additional details (optional)",
-                placeholder="e.g. 'Section 17 was cited but the answer quoted Section 18'",
-                key=f"fb_comment_{qa_id}",
-                max_chars=3000,
-            )
-
-            col_sub, col_skip = st.columns(2)
-            if col_sub.button("📤 Submit feedback", use_container_width=True, key=f"fb_sub_{qa_id}"):
-                fb_store.save(
-                    qa_id        = qa_id,
-                    query        = latest.get("query", ""),
-                    response     = latest.get("response", ""),
-                    citations    = latest.get("citations", []),
-                    rating       = 1,
-                    failure_type = failure_key,
-                    comment      = comment,
-                )
-                store.log_qa(
-                    latest.get("query", ""), latest.get("response", ""),
-                    latest.get("citations", []), 1, qa_id,
-                )
-                st.session_state[submitted_key] = True
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-
-            if col_skip.button("⏭ Skip details", use_container_width=True, key=f"fb_skip_{qa_id}"):
-                fb_store.save(
-                    qa_id     = qa_id,
-                    query     = latest.get("query", ""),
-                    response  = latest.get("response", ""),
-                    citations = latest.get("citations", []),
-                    rating    = 1,
-                )
-                store.log_qa(
-                    latest.get("query", ""), latest.get("response", ""),
-                    latest.get("citations", []), 1, qa_id,
-                )
-                st.session_state[submitted_key] = True
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-
         else:
-            # ── Initial rating buttons ─────────────────────────────────────
-            st.markdown("**Was this response helpful?**")
-            c1, c2, c3 = st.columns(3)
+            st.markdown(
+                '<span class="fb-done fb-done-dn">👎&nbsp; Not helpful</span>',
+                unsafe_allow_html=True,
+            )
+        return
 
-            if c1.button("👍 Helpful", use_container_width=True, key=f"fb_pos_{qa_id}"):
-                fb_store.save(
-                    qa_id     = qa_id,
-                    query     = latest.get("query", ""),
-                    response  = latest.get("response", ""),
-                    citations = latest.get("citations", []),
-                    rating    = 5,
-                )
-                store.log_qa(
-                    latest.get("query", ""), latest.get("response", ""),
-                    latest.get("citations", []), 5, qa_id,
-                )
-                st.session_state[submitted_key] = True
-                st.rerun()
+    # ── Thumbs-down detail form ────────────────────────────────────────────
+    if st.session_state.get(pending_key) == "negative_form":
+        st.markdown("**What went wrong?** *(optional details help improve the system)*")
 
-            if c2.button("😐 Okay", use_container_width=True, key=f"fb_neu_{qa_id}"):
-                fb_store.save(
-                    qa_id     = qa_id,
-                    query     = latest.get("query", ""),
-                    response  = latest.get("response", ""),
-                    citations = latest.get("citations", []),
-                    rating    = 3,
-                )
-                store.log_qa(
-                    latest.get("query", ""), latest.get("response", ""),
-                    latest.get("citations", []), 3, qa_id,
-                )
-                st.session_state[submitted_key] = True
-                st.rerun()
-
-            if c3.button("👎 Needs work", use_container_width=True, key=f"fb_neg_{qa_id}"):
-                # Don't submit yet — open the detail form
-                st.session_state[pending_key] = "negative_form"
-                st.rerun()
-
-        # ── Download ───────────────────────────────────────────────────────
-        st.markdown("---")
-        cits = ", ".join(latest.get("citations", []))
-        cats = ", ".join(latest.get("categories_hit", []))
-        export = (
-            f"Q: {latest['query']}\n\n"
-            f"A: {latest['response']}\n\n"
-            f"Sources: {cits}\n"
-            f"Categories searched: {cats}\n"
-            f"Time: {latest['timestamp']}"
+        failure_label = st.selectbox(
+            "Failure type",
+            options=list(FeedbackStore.FAILURE_TYPES.values()),
+            key=f"fb_ft_{qa_id}",
+            label_visibility="collapsed",
         )
-        st.download_button(
-            "📥 Download response",
-            data=export,
-            file_name=f"chatssm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            use_container_width=True,
+        failure_key = next(
+            k for k, v in FeedbackStore.FAILURE_TYPES.items() if v == failure_label
         )
+        comment = st.text_area(
+            "Details",
+            placeholder="e.g. 'Section 17 was cited but the answer quoted Section 18'",
+            key=f"fb_comment_{qa_id}",
+            max_chars=3000,
+            label_visibility="collapsed",
+        )
+        col_sub, col_skip, _ = st.columns([2, 2, 5])
+        if col_sub.button("Submit", key=f"fb_sub_{qa_id}", type="primary"):
+            _submit_feedback(msg, qa_id, 1, failure_key, comment, vote="down")
+        if col_skip.button("Skip", key=f"fb_skip_{qa_id}"):
+            _submit_feedback(msg, qa_id, 1, None, "", vote="down")
+        return
+
+    # ── Default: icon buttons row ──────────────────────────────────────────
+    col_up, col_dn, col_dl, _ = st.columns([1, 1, 1, 10])
+
+    if col_up.button("👍", key=f"fb_up_{qa_id}", help="Helpful"):
+        _submit_feedback(msg, qa_id, 5, None, "", vote="up")
+
+    if col_dn.button("👎", key=f"fb_dn_{qa_id}", help="Not helpful"):
+        st.session_state[pending_key] = "negative_form"
+        st.rerun()
+
+    cits     = ", ".join(msg.get("citations", []))
+    cats_str = ", ".join(msg.get("categories_hit", []))
+    export   = (
+        f"Q: {msg.get('query', '')}\n\n"
+        f"A: {msg.get('response', '')}\n\n"
+        f"Sources: {cits}\n"
+        f"Categories: {cats_str}\n"
+        f"Time: {msg.get('timestamp', '')}"
+    )
+    col_dl.download_button(
+        "📥",
+        data      = export,
+        file_name = f"chatssm_{qa_id}.txt",
+        mime      = "text/plain",
+        help      = "Download this response",
+        key       = f"fb_dl_{qa_id}",
+    )
 
 
 # =============================================================================
@@ -2420,6 +3215,60 @@ def _render_feedback(latest: Dict) -> None:
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
+    # ── Check if indexes need building BEFORE rendering any UI ────────────────
+    kb  = _kb()
+    reg = _reg()
+
+    enabled_sources = reg.all_enabled()
+    needs_building = any(
+        not os.path.exists(os.path.join(AppConfig.CACHE_DIR, f"{src.key}_index.pkl"))
+        for src in enabled_sources
+        if src.key not in kb._indexes or not kb._indexes[src.key].is_ready()
+    )
+
+    if needs_building:
+        # Show a dedicated full-screen loading page — no sidebar, no header, no chat
+        st.markdown(
+            """
+            <div style="
+                display:flex; flex-direction:column; align-items:center;
+                justify-content:center; height:80vh; text-align:center;
+            ">
+                <h1 style="font-size:2rem; margin-bottom:8px;">⚖️ ChatSSM</h1>
+                <p style="color:#666; margin-bottom:32px;">
+                    Initializing knowledge base, please wait…
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        progress_bar = st.progress(0)
+        status_text  = st.empty()
+
+        for i, source in enumerate(enabled_sources):
+            cache_path = os.path.join(AppConfig.CACHE_DIR, f"{source.key}_index.pkl")
+            if os.path.exists(cache_path):
+                progress_bar.progress((i + 1) / len(enabled_sources))
+                continue
+            status_text.markdown(f"**Building:** {source.name}  `({i+1}/{len(enabled_sources)})`")
+            try:
+                idx = kb.get_or_build(source)
+                if idx and idx.is_ready():
+                    status_text.markdown(f"✅ {source.name}")
+                else:
+                    status_text.markdown(f"⚠️ Skipped: {source.name} — run `python preprocess.py --key {source.key}`")
+            except Exception as exc:
+                logger.error("Error building %s: %s", source.key, exc)
+                status_text.markdown(f"❌ Error: {source.name} — {exc}")
+            progress_bar.progress((i + 1) / len(enabled_sources))
+
+        status_text.markdown("✅ **Knowledge base ready! Reloading...**")
+        CacheBuilder._warmup_llm()
+        time.sleep(1)   # brief pause so user sees the done message
+        st.rerun()      # rerun now renders the full chat UI cleanly
+        return
+
+    # ── All indexes ready — render normal chat UI ─────────────────────────────
     ollama_ok, selected_keys, cat_filter = _sidebar()
     _header()
 
@@ -2430,14 +3279,19 @@ def main() -> None:
         )
         st.stop()
 
-    kb  = _kb()
-    reg = _reg()
-    if not CacheBuilder.ensure_indexes_ready(kb, reg):
-        st.warning("Could not initialize knowledge base. Please check logs.")
-        st.stop()
+    uid = _get_persistent_user_id()
+
+    # MemoryManager requires the EmbeddingService singleton (_emb()), so it
+    # cannot be created in _init_session() which runs before the singletons
+    # are defined.  Create it here on first run, persist in session_state.
+    if "mem_mgr" not in st.session_state:
+        st.session_state["mem_mgr"] = MemoryManager(
+            embedding_service = _emb(),
+            session_id        = _get_persistent_user_id(),
+        )
 
     if not st.session_state["chat_history"]:
-        st.session_state["chat_history"] = _store().load_history()
+        st.session_state["chat_history"] = _store().load_history(uid)
 
     _render_messages()
 
@@ -2465,8 +3319,9 @@ def main() -> None:
 
     prefill_val = st.session_state.pop("prefill", "")
     user_input = st.chat_input(
-        "Ask about legislation, practice notes, guidelines, circulars, FAQ, or forms…",
+        "Ask anything...",
         key="chat_input",
+        max_chars=2000,
     ) or prefill_val
 
     if user_input and user_input.strip():
@@ -2481,20 +3336,53 @@ def main() -> None:
         llm   = _llm()
         store = _store()
         opt   = _optimizer()
+        memory: ConversationMemory = st.session_state["conv_memory"]
+        lang = _detect_language(user_input)
+
+        # ── Short-circuit for greetings — no retrieval needed ─────────────────
+        if _GREETING_RE.match(user_input.strip()):
+            greeting_response = _GREETING_RESPONSES.get(lang, _GREETING_RESPONSES["en"])
+            with st.chat_message("assistant", avatar="⚖️"):
+                st.markdown(greeting_response)
+            # Save to history but do NOT cache — greetings are trivial
+            timestamp = datetime.now().isoformat()
+            qa_id     = _make_qa_id(user_input, timestamp)
+            memory.add_turn(user_input, greeting_response)
+            record = {
+                "qa_id":          qa_id,
+                "query":          user_input,
+                "response":       greeting_response,
+                "citations":      [],
+                "categories_hit": [],
+                "timestamp":      timestamp,
+                "cache_key":      "",
+            }
+            st.session_state["chat_history"].append(record)
+            store.save_history(st.session_state["chat_history"], uid)
+            st.session_state["just_submitted"] = True
+            st.rerun()
+            return
 
         st.markdown(
             f'<div class="mu"><div class="b">{html.escape(user_input)}</div></div>',
             unsafe_allow_html=True,
         )
 
-        memory: ConversationMemory = st.session_state["conv_memory"]
         with st.spinner("_Thinking..._"):
             search_query = memory.rewrite_query(user_input, llm)
+
             result = kb.search(
                 query         = search_query,
                 selected_keys = selected_keys,
                 cat_filter    = cat_filter,
+                lang          = lang,
             )
+            form_reg    = _form_registry()
+            query_vec   = _emb().embed(search_query)   # already cached from kb.search
+            matched_forms = form_reg.detect(user_input, query_vec=query_vec)
+            rc = _response_cache()
+            cached = rc.get(user_input, selected_keys, cat_filter, lang)
+
             patches  = opt.get_patches()
 
         response = (
@@ -2503,100 +3391,155 @@ def main() -> None:
                     "licensed professional."
                 )
 
-        if not result["chunks"]:
-            with st.chat_message("assistant", avatar="⚖️"):
-                st.markdown(response)
-
-        else:
-            system = llm._SYSTEM_BASE
-            if patches:
-                system += f"\n{patches}\n"
-            act_hint = (
-                f"\nNOTE: This query relates to the {result.get('detected_act')}. "
-                f"Prioritize chunks from that Act when constructing your answer.\n"
-            ) if result.get("detected_act") else ""
-
-            context_parts = []
-
-            for i, chunk in enumerate(result["chunks"]):
-                src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
-                if len(chunk) > AppConfig.MAX_CHUNK_CHARS:
-                    if "[TABLE]" in chunk:
-                        # Find the last complete table row before the limit
-                        cut = chunk.rfind("\n", 0, AppConfig.MAX_TABLE_CHARS)
-                        safe_chunk = chunk[:cut] if cut > 0 else chunk[:AppConfig.MAX_TABLE_CHARS]
-                    else:
-                        safe_chunk = chunk[:AppConfig.MAX_CHUNK_CHARS]
-                else:
-                    safe_chunk = chunk
-                context_parts.append(f"[SOURCE: {src}]\n{safe_chunk}\n[/SOURCE: {src}]")
-            context_block = "\n\n".join(context_parts)
-            history_block = memory.build_history_block()
-            prompt = (
-                f"/no_think\n{history_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
-                f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}\n"
-                f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
-            )
-
-            def _stream_with_retry(p: str, s: str):
-                """Run one LLM call; return (generator, first_token_or_None)."""
-                gen   = llm._call(p, s)
-                first = next(gen, None)   # blocks here — spinner shows during this wait
-                return gen, first
-            
-            raw_tokens  = []
-
-            with st.spinner("_Generating response..._"):
-                try:
-                    gen, first_token = _stream_with_retry(prompt, system)
-                except Exception as exc:
-                    gen, first_token = iter([]), f"❌ Error during generation: {exc}"
-                    logger.error("LLM call failed before first token: %s", exc, exc_info=True)
-
+        if cached:
+            response = cached["response"]
             with st.chat_message("assistant", avatar="⚖️"):
                 stream_box = st.empty()
-                try:
-                    if first_token:
-                        raw_tokens.append(first_token)
-                        stream_box.markdown("".join(raw_tokens) + "▌")
+                words = response.split(" ")
+                buf = ""
+                for i, word in enumerate(words):
+                    buf += ("" if i == 0 else " ") + word
+                    if i % 8 == 7:          # update every 8 words — fast but visible
+                        stream_box.markdown(buf + "▌")
+                        time.sleep(0.04)
+                stream_box.markdown(response)  # final render with full formatting
+        else:
+            if not result["chunks"]:
+                with st.chat_message("assistant", avatar="⚖️"):
+                    st.markdown(response)
 
-                    for token in gen:
-                        raw_tokens.append(token)
-                        stream_box.markdown("".join(raw_tokens) + "▌")
+            else:
+                system = llm._SYSTEM_BASE
+                if patches:
+                    system += f"\n{patches}\n"
+                act_hint = (
+                    f"\nNOTE: This query relates to the {result.get('detected_act')}. "
+                    f"Prioritize chunks from that Act when constructing your answer.\n"
+                ) if result.get("detected_act") else ""
 
-                except Exception as exc:
-                    raw_tokens.append(f"\n\n❌ Error during streaming: {exc}")
-                    logger.error("Streaming error in main(): %s", exc, exc_info=True)
+                context_parts = []
+                chunk_types_list = result.get("chunk_types", [])
 
-                raw = "".join(raw_tokens)
+                for i, chunk in enumerate(result["chunks"]):
+                    src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
+                    ctype = chunk_types_list[i] if i < len(chunk_types_list) else "text"
+                    type_label = " | VISUAL CONTENT" if ctype == "visual" else ""
+                    if len(chunk) > AppConfig.MAX_CHUNK_CHARS:
+                        if "[TABLE]" in chunk:
+                            # Find the last complete table row before the limit
+                            cut = chunk.rfind("\n", 0, AppConfig.MAX_TABLE_CHARS)
+                            safe_chunk = chunk[:cut] if cut > 0 else chunk[:AppConfig.MAX_TABLE_CHARS]
+                        else:
+                            cut = AppConfig.MAX_CHUNK_CHARS
+                            for m in re.finditer(r'(?<=[.!?])\s', chunk[:AppConfig.MAX_CHUNK_CHARS]):
+                                cut = m.end()
+                            safe_chunk = chunk[:cut] if cut > 60 else chunk[:AppConfig.MAX_CHUNK_CHARS]
+                    else:
+                        safe_chunk = chunk
+                    context_parts.append(f"[SOURCE: {src}{type_label}]\n{safe_chunk}\n[/SOURCE: {src}]")
+                context_block = "\n\n".join(context_parts)
+                history_block = memory.build_history_block()
+                # Build memory block using the query embedding.
+                # _emb().embed() hits the in-memory cache (populated by kb.search
+                # moments earlier) so this costs ~0ms — no extra Ollama call.
+                _query_vec = _emb().embed(search_query)
+                memory_block = st.session_state["mem_mgr"].build_memory_block(
+                    query_vec=_query_vec,
+                    query_text=search_query, 
+                )
 
-                if len(raw.strip()) < 30 and not raw.startswith("❌"):
-                    logger.warning("LLM returned near-empty response; retrying once.")
-                    stream_box.markdown("_Response was too short, retrying once..._")
-                    raw_tokens = []
+                if lang == "ms":
+                    lang_directive = "⚠️ WAJIB: Jawab SEPENUHNYA dalam Bahasa Malaysia. Jangan gunakan bahasa Inggeris langsung.\n"
+                elif lang == "mixed":
+                    lang_directive = "NOTE: User mixed Malay and English. Respond in English, Malay legal terms are acceptable.\n"
+                else:
+                    lang_directive = ""
 
-                    with st.spinner("_Retrying generation..._"):
-                        try:
-                            gen2, first2 = _stream_with_retry(prompt, system)
-                        except Exception as exc:
-                            gen2, first2 = iter([]), f"❌ Retry failed: {exc}"
-                            logger.error("LLM retry failed: %s", exc, exc_info=True)
-                    stream_box.empty()
-                    
-                    if first2:
-                        raw_tokens.append(first2)
-                        stream_box.markdown("".join(raw_tokens) + "▌")
-                    for token in gen2:
-                        raw_tokens.append(token)
-                        stream_box.markdown("".join(raw_tokens) + "▌")
+                prompt = (
+                    f"/no_think\n{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}"
+                    f"Before writing, identify the single most relevant section in the CONTEXT above.\n"
+                    f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
+                )
+
+                def _stream_with_retry(p: str, s: str, temp: Optional[float] = None):
+                    """Run one LLM call; return (generator, first_token_or_None)."""
+                    gen   = llm._call(p, s, temp_override=temp)
+                    first = next(gen, None)
+                    return gen, first
+                
+                raw_tokens  = []
+
+                with st.spinner("_Generating response..._"):
+                    try:
+                        gen, first_token = _stream_with_retry(prompt, system)
+                    except Exception as exc:
+                        gen, first_token = iter([]), f"❌ Error during generation: {exc}"
+                        logger.error("LLM call failed before first token: %s", exc, exc_info=True)
+
+                with st.chat_message("assistant", avatar="⚖️"):
+                    stream_box = st.empty()
+                    try:
+                        if first_token:
+                            raw_tokens.append(first_token)
+                            stream_box.markdown("".join(raw_tokens) + "▌")
+
+                        for token in gen:
+                            raw_tokens.append(token)
+                            stream_box.markdown("".join(raw_tokens) + "▌")
+
+                    except Exception as exc:
+                        raw_tokens.append(f"\n\n❌ Error during streaming: {exc}")
+                        logger.error("Streaming error in main(): %s", exc, exc_info=True)
+
                     raw = "".join(raw_tokens)
 
-                response = llm._postprocess(raw)
-                stream_box.markdown(response)  # Finalize the response display (remove the "▌" cursor)
+                    if len(raw.strip()) < 30 and not raw.startswith("❌"):
+                        logger.warning("LLM returned near-empty response; retrying once.")
+                        stream_box.markdown("_Response was too short, retrying once..._")
+                        raw_tokens = []
+
+                        with st.spinner("_Retrying generation..._"):
+                            try:
+                                gen2, first2 = _stream_with_retry(prompt, system, temp=0.15)
+                            except Exception as exc:
+                                gen2 = iter([])
+                                first2 = None
+                                logger.error("LLM retry failed: %s", exc, exc_info=True)
+                        
+                        if first2 and not str(first2).startswith("❌"):
+                            stream_box.empty()
+                            raw_tokens.append(first2)
+                            stream_box.markdown("".join(raw_tokens) + "▌")
+                            for token in gen2:
+                                raw_tokens.append(token)
+                                stream_box.markdown("".join(raw_tokens) + "▌")
+                            raw = "".join(raw_tokens)
+                        else:
+                            # Retry also failed — show a clear, helpful message
+                            response = (
+                                "I wasn't able to generate a response for this question. "
+                                "This can happen with complex or ambiguous queries. "
+                                "Please try rephrasing your question, or break it into smaller parts."
+                            )
+                            raw = ""
+                            stream_box.markdown(response)
+
+                    if raw.strip():
+                        response = llm._postprocess(raw, lang=lang)
+                        if not _OOS_PATTERN.search(response):
+                            rc.put(user_input, selected_keys, cat_filter,
+                                response, result.get("citations", []), result.get("categories_hit", []), lang)
+                        stream_box.markdown(response)  # Finalize the response display (remove the "▌" cursor)
+                        _render_form_cards(matched_forms, lang=lang)
 
         timestamp = datetime.now().isoformat()
         qa_id     = _make_qa_id(user_input, timestamp)
         memory.add_turn(user_input, response)
+        # Inspect the user's message for memory-worthy content (preferences,
+        # corrections, instructions).  Never called on the LLM response to
+        # prevent hallucinations from being stored.
+        st.session_state["mem_mgr"].observe(user_input, lang=lang)
 
         record = {
             "qa_id":          qa_id,
@@ -2605,15 +3548,17 @@ def main() -> None:
             "citations":      result.get("citations", []),
             "categories_hit": result.get("categories_hit", []),
             "timestamp":      timestamp,
+            "cache_key":      ResponseCache._make_key(user_input, selected_keys, cat_filter, lang),
+            "forms": [
+                {"form_number": f.form_number, "name": f.name, "name_ms": f.name_ms,
+                "purpose": f.purpose, "purpose_ms": f.purpose_ms, "url": f.url}
+                for f in matched_forms
+            ],
         }
         st.session_state["chat_history"].append(record)
-        store.save_history(st.session_state["chat_history"])
+        store.save_history(st.session_state["chat_history"], uid)
         st.session_state["just_submitted"] = True
         st.rerun()
-
-    # Feedback panel for most recent exchange
-    if st.session_state["chat_history"]:
-        _render_feedback(st.session_state["chat_history"][-1])
 
 if __name__ == "__main__":
     main()

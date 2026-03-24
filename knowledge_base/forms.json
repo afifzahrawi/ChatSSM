@@ -1,0 +1,35 @@
+[
+  {
+    "form_id": "ssm-form-49",
+    "form_number": "Form 49",
+    "name": "Return Giving Particulars in Register of Directors, Managers and Secretaries",
+    "name_ms": "Borang 49 — Butiran dalam Daftar Pengarah, Pengurus dan Setiausaha",
+    "purpose": "Notify SSM of changes to directors, managers, or secretaries of a company.",
+    "purpose_ms": "Memberitahu SSM mengenai perubahan pengarah, pengurus atau setiausaha syarikat.",
+    "url": "https://www.ssm.com.my/...",
+    "use_cases": [
+      "appointing a new director",
+      "removing a director",
+      "change of company secretary",
+      "notifying SSM of management changes"
+    ],
+    "related_sections": ["Section 58", "Section 237"],
+    "category": "Directors"
+  },
+  {
+    "form_id": "ssm-form-24",
+    "form_number": "Form 24",
+    "name": "Return of Allotment of Shares",
+    "name_ms": "Borang 24 — Penyata Peruntukan Saham",
+    "purpose": "Notify SSM when new shares are allotted to shareholders.",
+    "purpose_ms": "Memberitahu SSM apabila saham baru diperuntukkan kepada pemegang saham.",
+    "url": "https://www.ssm.com.my/...",
+    "use_cases": [
+      "allotting shares to new shareholders",
+      "increasing share capital",
+      "return of allotment"
+    ],
+    "related_sections": ["Section 75"],
+    "category": "Shares"
+  }
+]

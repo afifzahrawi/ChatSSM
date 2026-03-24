@@ -73,8 +73,9 @@ import re
 import sys
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pypdf import PdfReader
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -92,7 +93,7 @@ logger = logging.getLogger("preprocess")
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
-SOURCES_CONFIG   = "knowledge_sources.json"   # optional overrides file
+SOURCES_CONFIG   = os.path.join("knowledge_base", "knowledge_sources.json")  # optional overrides file
 SOURCES_DIR      = os.path.join("knowledge_base", "sources")   # auto-discovery root
 PROCESSED_DIR    = os.path.join("knowledge_base", "processed")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
@@ -106,14 +107,23 @@ OCR_MODEL          = os.environ.get("CHATSSM_OCR_MODEL", "glm-ocr")
 OCR_TIMEOUT        = int(os.environ.get("CHATSSM_OCR_TIMEOUT", "600"))   # seconds per page/image
 MIN_TEXT_PER_PAGE  = 100   # chars; pages below this are treated as scanned and sent to OCR
 
+VLM_MODEL        = os.environ.get("CHATSSM_VLM_MODEL", "qwen3-vl:8b")
+MIN_IMAGE_AREA   = int(os.environ.get("CHATSSM_MIN_IMAGE_AREA", "40000"))
+DESCRIBE_VISUALS = os.environ.get("CHATSSM_DESCRIBE_VISUALS",  "false").lower() == "true"
+
 # ─── GPU offload settings (Ollama) ──────────────────────────────────────────
 # -1 = all layers on GPU; 0 = CPU only; N = offload N layers
 OCR_NUM_GPU    = int(os.environ.get("CHATSSM_OCR_NUM_GPU",   "-1"))
-CHUNK_NUM_GPU  = int(os.environ.get("CHATSSM_CHUNK_NUM_GPU", "-1"))
-OCR_WORKERS    = int(os.environ.get("CHATSSM_OCR_WORKERS",    "4"))
+CHUNK_NUM_GPU  = int(os.environ.get("CHATSSM_CHUNK_NUM_GPU", "0"))
+OCR_WORKERS    = int(os.environ.get("CHATSSM_OCR_WORKERS",    "2"))
+
+# ─── Constants for hybrid chunker ─────────────────────────────────────────────
+
+MAX_CHUNK_CHARS   = 1200   # hard ceiling per chunk
+OVERLAP_CHARS     = 150    # trailing context carried into next chunk
+MIN_CHUNK_CHARS   = 60     # discard chunks shorter than this
 
 # ─── CSV output columns ───────────────────────────────────────────────────────
-
 CSV_COLUMNS = [
     "source_key",
     "source_name",
@@ -195,6 +205,13 @@ _CONTENT_STARTERS = re.compile(
     re.IGNORECASE,
 )
 
+_SLIDE_NOTES_RE = re.compile(r"^click to add notes$", re.IGNORECASE)
+
+# Placeholder used by _sanitize_for_llm to neutralise literal double-quote chars
+# before sending text to the AI chunker.  Restored to " after JSON is parsed.
+# Must be printable ASCII, never appear in legal document text, and survive all
+# 4 JSON repair passes (no control chars, no backslashes, no braces).
+_DQUOTE_PLACEHOLDER = "__QUOT__"
 
 def _is_marginal_note(line: str) -> bool:
     """
@@ -211,6 +228,94 @@ def _is_marginal_note(line: str) -> bool:
     # Allow colons for titles like "Compliance officer: responsibilities"
     return True
 
+def parse_others_document(
+    text: str,
+    source_key: str,
+    source_name: str,
+) -> List[Dict]:
+    MAX_CHUNK_CHARS = 1200
+    OVERLAP_CHARS   = 150
+    MIN_CHUNK_CHARS = 60
+
+    if not text or len(text.strip()) < MIN_CHUNK_CHARS:
+        return []
+
+    rows:      List[Dict] = []
+    chunk_num: int        = 0
+
+    def _append(content: str, section_label: str = "") -> None:
+        nonlocal chunk_num
+        content = content.strip()
+        if len(content) < MIN_CHUNK_CHARS:
+            return
+        chunk_num += 1
+        rows.append({
+            "source_key":    source_key,
+            "source_name":   source_name,
+            "part":          "",
+            "division":      "",
+            "subdivision":   "",
+            "section":       section_label or f"Section {chunk_num}",
+            "section_title": "",
+            "content":       content,
+        })
+
+    # ── Step 1: extract visual description blocks as atomic units ────────────
+    # Split the text into interleaved segments:
+    #   even indexes = plain text
+    #   odd indexes  = [VISUAL DESCRIPTION]...[/VISUAL DESCRIPTION] blocks
+    _VISUAL_RE = re.compile(
+        r'(\[VISUAL DESCRIPTION\].*?\[/VISUAL DESCRIPTION\])',
+        re.DOTALL,
+    )
+    segments = _VISUAL_RE.split(text)
+
+    for seg_idx, segment in enumerate(segments):
+        if not segment.strip():
+            continue
+
+        is_visual = _VISUAL_RE.fullmatch(segment.strip()) is not None
+
+        if is_visual:
+            # Visual description blocks are always one atomic chunk
+            # Strip the wrapper tags — the content is the description itself
+            content = re.sub(
+                r'^\[VISUAL DESCRIPTION\]\n?|\n?\[/VISUAL DESCRIPTION\]$',
+                '', segment.strip(),
+            ).strip()
+            _append(content, section_label=f"Visual {chunk_num + 1}")
+            continue
+
+        # ── Step 2: plain text — sliding window at sentence boundaries ───────
+        boundary_positions = sorted(set(
+            [m.end() for m in re.finditer(r'(?<=[.!?])\s+', segment)]
+            + [m.end() for m in re.finditer(r'\n{2,}', segment)]
+        ))
+
+        start = 0
+        while start < len(segment):
+            end = min(start + MAX_CHUNK_CHARS, len(segment))
+            cut = end
+            for pos in reversed(boundary_positions):
+                if start < pos <= end:
+                    cut = pos
+                    break
+
+            chunk = segment[start:cut].strip()
+            _append(chunk)
+
+            next_start = cut
+            if next_start <= start:
+                next_start = start + MAX_CHUNK_CHARS
+            start = next_start
+
+    logger.info(
+        "  Deterministic chunker: produced %d chunks (%d visual) from '%s'.",
+        len(rows),
+        sum(1 for r in rows if r["section"].startswith("Visual")),
+        source_name,
+    )
+    return rows
 
 # ─── Data class ───────────────────────────────────────────────────────────────
 
@@ -415,6 +520,7 @@ def _load_json_overrides(
                 type       = raw.get("type", "pdf"),
                 doc_type   = raw.get("doc_type", "act"),
                 enabled    = raw.get("enabled", True),
+                relates_to_acts = raw.get("relates_to_acts", []),
                 url        = raw.get("url"),
                 local_path = raw.get("local_path"),
             )
@@ -576,6 +682,44 @@ def ocr_image_bytes(image_bytes: bytes, mime_type: str = "image/png") -> str:
         logger.warning("  OCR failed: %s", exc)
         return ""
 
+def describe_visual_content(image_bytes: bytes, mime_type: str = "image/jpeg", page_hint: str = "") -> str:
+    import base64
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    hint = f" This image is from {page_hint}." if page_hint else ""
+    prompt = (
+        f"Analyze this image from a document.{hint}\n"
+        "Describe what you see precisely and completely:\n"
+        "- Flowchart/org-chart: list every box, arrow, and relationship.\n"
+        "- Chart/graph: state the chart type, axis labels, data series, key values, and trend.\n"
+        "- Table: describe column headers and summarize the data rows.\n"
+        "- Plain text: transcribe it exactly.\n"
+        "- Mixed: describe visual elements and transcribe text.\n"
+        "Output only the description — no preamble."
+    )
+    try:
+        resp = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": VLM_MODEL, "prompt": prompt, "images": [b64],
+                  "stream": False, "options": {"temperature": 0.0, "num_gpu": OCR_NUM_GPU}},
+            timeout=OCR_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.warning("  VLM returned HTTP %s for visual description.", resp.status_code)
+            return ""
+        text = resp.json().get("response", "").strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Reject suspiciously short responses — a real description is at least a sentence
+        if len(text.split()) < 5:
+            logger.warning("  VLM visual description too short (%d words) — discarding.", len(text.split()))
+            return ""
+        return text
+    except requests.Timeout:
+        logger.warning("  VLM timed out (%ds) for visual description.", OCR_TIMEOUT)
+        return ""
+    except Exception as exc:
+        logger.warning("  VLM visual description failed: %s", exc)
+        return ""
+
 # ─── PDF acquisition ──────────────────────────────────────────────────────────
 
 def get_pdf_bytes(source: SourceEntry) -> Optional[bytes]:
@@ -590,17 +734,27 @@ def get_pdf_bytes(source: SourceEntry) -> Optional[bytes]:
             return None
 
     if source.url:
-        logger.info("  Downloading PDF from URL …")
-        try:
-            resp = requests.get(source.url, timeout=60)
-            resp.raise_for_status()
-            logger.info("  Downloaded %d bytes.", len(resp.content))
-            return resp.content
-        except requests.Timeout:
-            logger.error("  Download timed out.")
-        except Exception as exc:
-            logger.error("  Download failed: %s", exc)
-        return None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info("  Downloading PDF from URL (attempt %d/%d) …", attempt, max_attempts)
+                resp = requests.get(source.url, timeout=60)
+                resp.raise_for_status()
+                logger.info("  Downloaded %d bytes.", len(resp.content))
+                return resp.content
+            except KeyboardInterrupt:
+                logger.warning("  Download interrupted (attempt %d). Retrying …", attempt)
+                time.sleep(2 * attempt)   # back off: 2s, 4s, 6s
+                if attempt == max_attempts:
+                    logger.error("  Download failed after %d attempts (KeyboardInterrupt).", max_attempts)
+                    return None
+            except requests.Timeout:
+                logger.warning("  Download timed out (attempt %d).", attempt)
+                if attempt == max_attempts:
+                    logger.error("  Download timed out after %d attempts.", max_attempts)
+            except Exception as exc:
+                logger.error("  Download failed: %s", exc)
+                return None
 
     logger.error("  Source '%s' has no url or local_path.", source.key)
     return None
@@ -622,6 +776,20 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
     Requires pdf2image + poppler for the OCR path. If pdf2image is not
     installed, scanned pages are skipped with a warning.
     """
+    def _looks_like_diagram(text: str) -> bool:
+
+        if not text or len(text.strip()) < 30:
+            return True
+        words = text.split()
+        avg_word_len = sum(len(w) for w in words) / max(len(words), 1)
+        alnum_ratio = sum(1 for c in text if c.isalnum()) / max(len(text), 1)
+        sentence_count = len(re.findall(r'[.!?]\s', text))
+        return (
+            avg_word_len < 2.5
+            or alnum_ratio < 0.4
+            or (len(words) > 30 and sentence_count == 0)
+        )
+
     try:
         import pdf2image as _pdf2image
         _have_pdf2image = True
@@ -639,7 +807,9 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
     pages_out: List[str] = []
     ocr_count  = 0
+    visual_count = 0
     total_pages = 0
+    
 
     # ── pdfplumber (primary) ────────────────────────────────────────────────
     try:
@@ -648,6 +818,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             native_texts: List[str] = []
             table_texts:  List[str] = []
             needs_ocr:    List[int] = []
+            needs_visual: List[int] = []
 
             for page_num, page in enumerate(pdf.pages):
                 # ── Native text extraction ────────────────────────────────────
@@ -681,6 +852,12 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                 if len(native_text) < MIN_TEXT_PER_PAGE:
                     needs_ocr.append(page_num)
 
+                # ── Flag text-rich pages with large embedded images ────────────
+                if DESCRIBE_VISUALS and len(native_text) >= MIN_TEXT_PER_PAGE:
+                    if any((i.get("width", 0) * i.get("height", 0)) >= MIN_IMAGE_AREA
+                           for i in (page.images or [])):
+                        needs_visual.append(page_num)
+
         # ── Batch OCR all scanned pages — parallel render + OCR ──────────────────
         ocr_results: Dict[int, str] = {}
         if needs_ocr and _have_pdf2image:
@@ -690,12 +867,24 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             )
 
             def _render_and_ocr(page_num: int) -> Tuple[int, str]:
-                """Render one page to JPEG and OCR it. Runs in a thread pool."""
+                """
+                Render one page to JPEG and extract its content.
+
+                When DESCRIBE_VISUALS=True:
+                Sends the page to the VLM for semantic understanding — captures
+                diagram structure, chart values, and mixed visual+text content.
+                Falls back to plain OCR if the VLM returns nothing.
+
+                When DESCRIBE_VISUALS=False (default):
+                Sends the page to the OCR model for plain text transcription
+                with a half-resolution retry on failure.
+                """
                 try:
                     from PIL import Image as PILImage
+                    dpi = 150 if DESCRIBE_VISUALS else 300
                     page_images = _pdf2image.convert_from_bytes(
                         pdf_bytes,
-                        dpi        = 300,
+                        dpi        = dpi,
                         fmt        = "jpeg",
                         first_page = page_num + 1,
                         last_page  = page_num + 1,
@@ -720,20 +909,49 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
                     buf = io.BytesIO()
                     img.convert("RGB").save(buf, format="JPEG", quality=80)
-                    ocr_text = ocr_image_bytes(buf.getvalue(), "image/jpeg")
-
-                    if not ocr_text:
-                        logger.warning(
-                            "    Page %d: OCR failed; retrying at half resolution.", page_num + 1
+                    jpeg_bytes = buf.getvalue()
+ 
+                    if DESCRIBE_VISUALS:
+                        # ── Visual understanding path ──────────────────────────
+                        # VLM semantically describes the page — understands diagrams,
+                        # charts, flowcharts, and scanned text with layout context.
+                        result_text = describe_visual_content(
+                            jpeg_bytes, "image/jpeg", f"page {page_num + 1}"
                         )
-                        smaller = img.resize((img.width // 2, img.height // 2), resample=1)
-                        buf2 = io.BytesIO()
-                        smaller.convert("RGB").save(buf2, format="JPEG", quality=75)
-                        del smaller
-                        ocr_text = ocr_image_bytes(buf2.getvalue(), "image/jpeg")
+                        if not result_text:
+                            logger.warning(
+                                "    Page %d: VLM description empty; "
+                                "falling back to plain OCR.", page_num + 1,
+                            )
+                            result_text = ocr_image_bytes(jpeg_bytes, "image/jpeg")
+                    else:
+                        # ── Standard OCR path ─────────────────────────────────
+                        result_text = ocr_image_bytes(jpeg_bytes, "image/jpeg")
+ 
+                        _ocr_words = result_text.split() if result_text else []
+                        if len(_ocr_words) < 10:
+                            logger.warning(
+                                "    Page %d: OCR output suspiciously short "
+                                "(%d words) — possible failure.",
+                                page_num + 1, len(_ocr_words),
+                            )
+                            result_text = ""   # trigger half-resolution retry
+ 
+                        if not result_text:
+                            logger.warning(
+                                "    Page %d: OCR failed; retrying at half resolution.",
+                                page_num + 1,
+                            )
+                            smaller = img.resize(
+                                (img.width // 2, img.height // 2), resample=1
+                            )
+                            buf2 = io.BytesIO()
+                            smaller.convert("RGB").save(buf2, format="JPEG", quality=75)
+                            del smaller
+                            result_text = ocr_image_bytes(buf2.getvalue(), "image/jpeg")
 
                     del img
-                    return page_num, ocr_text or ""
+                    return page_num, result_text or ""
 
                 except Exception as exc:
                     logger.warning("    Page %d: render or OCR failed: %s", page_num + 1, exc)
@@ -752,31 +970,131 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             except Exception as exc:
                 logger.warning("  Parallel OCR failed: %s", exc)
 
+        # ── Batch visual description for text-rich pages with embedded images ──
+        # Renders at 150 DPI (sufficient for VLM context, 2× faster than OCR path)
+        # and asks the VLM to semantically describe any diagrams/charts found.
+        visual_results: Dict[int, str] = {}
+        if needs_visual and _have_pdf2image:
+            logger.info(
+                "  %d page(s) have embedded visuals — running VLM description "
+                "with %d workers …", len(needs_visual), OCR_WORKERS,
+            )
+
+            def _render_and_describe(page_num: int) -> Tuple[int, str]:
+                """Render one page to JPEG at 150 DPI and get a VLM description."""
+                try:
+                    from PIL import Image as PILImage
+                    page_images = _pdf2image.convert_from_bytes(
+                        pdf_bytes,
+                        dpi        = 150,
+                        fmt        = "jpeg",
+                        first_page = page_num + 1,
+                        last_page  = page_num + 1,
+                    )
+                    if not page_images:
+                        return page_num, ""
+                    img = page_images[0]
+                    del page_images
+
+                    max_edge = 1400
+                    if max(img.width, img.height) > max_edge:
+                        scale = max_edge / max(img.width, img.height)
+                        resample = (
+                            PILImage.Resampling.LANCZOS
+                            if hasattr(PILImage, "Resampling") else 1
+                        )
+                        img = img.resize(
+                            (int(img.width * scale), int(img.height * scale)),
+                            resample=resample,
+                        )
+
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, format="JPEG", quality=80)
+                    del img
+
+                    desc = describe_visual_content(
+                        buf.getvalue(), "image/jpeg", f"page {page_num + 1}"
+                    )
+                    return page_num, desc
+
+                except Exception as exc:
+                    logger.warning(
+                        "    Page %d: visual render/describe failed: %s",
+                        page_num + 1, exc,
+                    )
+                    return page_num, ""
+
+            try:
+                with ThreadPoolExecutor(max_workers=OCR_WORKERS) as pool:
+                    futures = {
+                        pool.submit(_render_and_describe, pn): pn
+                        for pn in needs_visual
+                    }
+                    for future in as_completed(futures):
+                        pn, desc = future.result()
+                        if desc:
+                            visual_results[pn] = desc
+                            visual_count += 1
+                        else:
+                            logger.warning(
+                                "    Page %d: visual description returned empty.", pn + 1
+                            )
+            except Exception as exc:
+                logger.warning("  Parallel visual description failed: %s", exc)
+
         # ── Assemble final pages ──────────────────────────────────────────
         for page_num in range(total_pages):
             native_text = native_texts[page_num]
             table_text  = table_texts[page_num]
             if len(native_text) >= MIN_TEXT_PER_PAGE:
-                pages_out.append(native_text + table_text)
+                page_content = native_text + table_text
+                if page_num in visual_results:
+                    page_content += (
+                        f"\n\n[VISUAL DESCRIPTION]\n"
+                        f"{visual_results[page_num]}\n"
+                        f"[/VISUAL DESCRIPTION]"
+                    )
+                pages_out.append(page_content)
             elif page_num in ocr_results:
                 # Prepend any real native text (e.g. page headers) before OCR body
                 prefix = (native_text.strip() + "\n") if native_text.strip() else ""
-                pages_out.append(
-                    f"[OCR PAGE {page_num + 1}]\n{prefix}{ocr_results[page_num]}\n{table_text}"
-                )
+                if DESCRIBE_VISUALS:
+                    # VLM was used — wrap as visual description so chunk_type is
+                    # correctly detected as "visual" when the index is built.
+                    pages_out.append(
+                        f"[VISUAL DESCRIPTION]\n"
+                        f"{prefix}{ocr_results[page_num]}\n"
+                        f"[/VISUAL DESCRIPTION]\n{table_text}"
+                    )
+                else:
+                    pages_out.append(
+                        f"[OCR PAGE {page_num + 1}]\n{prefix}{ocr_results[page_num]}\n{table_text}"
+                    )
             elif native_text.strip():
                 pages_out.append(native_text + table_text)
 
         full = "\n\n".join(pages_out)
-        if ocr_count:
-             logger.info(
-                "  Extraction complete: %d / %d page(s) via OCR, %d total chars.",
-                ocr_count, total_pages, len(full),
-            )
-             return full
+        if ocr_count or visual_count:
+            if DESCRIBE_VISUALS:
+                # In visual mode, scanned pages go through the VLM (counted in
+                # ocr_count) — report them all as visual descriptions.
+                logger.info(
+                    "  Extraction complete: %d visual description(s) "
+                    "(%d scanned page(s), %d embedded image page(s)), "
+                    "%d / %d total pages, %d chars.",
+                    ocr_count + visual_count,
+                    ocr_count, visual_count,
+                    ocr_count + visual_count, total_pages, len(full),
+                )
+            else:
+                logger.info(
+                    "  Extraction complete: %d OCR page(s), %d visual description(s), "
+                    "%d / %d total pages, %d chars.",
+                    ocr_count, visual_count, ocr_count + visual_count, total_pages, len(full),
+                )
+            return full
         else:
             logger.info("  pdfplumber: %d chars from %d pages.", len(full), total_pages)
-
             if len(full) > 500 or "[TABLE]" in full:
                 return full
             logger.warning("  pdfplumber returned very little text; trying pypdf.")
@@ -1969,17 +2287,31 @@ def parse_slide_document(
         notes  = slide["notes"].strip()
         tables = slide["tables"].strip()
 
-        _NOTES_PLACEHOLDER = re.compile(r"^click to add notes$", re.IGNORECASE)
-        if _NOTES_PLACEHOLDER.match(notes):
+        if _SLIDE_NOTES_RE.match(notes):
             notes = ""
 
         # ── OCR any images on text-sparse slides ──────────────────────────────
         ocr_parts: List[str] = []
-        if slide["image_blobs"] and not body:
-            for img_bytes in slide["image_blobs"]:
-                ocr_text = ocr_image_bytes(img_bytes, "image/png")
-                if ocr_text and len(ocr_text.strip()) >= MIN_CONTENT_CHARS:
-                    ocr_parts.append(f"[IMAGE TEXT]\n{ocr_text.strip()}\n[/IMAGE TEXT]")
+        if slide["image_blobs"]:
+            if DESCRIBE_VISUALS:
+                # Describe every image semantically — works on text-rich slides too
+                for idx_img, img_bytes in enumerate(slide["image_blobs"], start=1):
+                    slide_hint = (
+                        f"slide {num}"
+                        + (f" ({title})" if title else "")
+                        + (f", image {idx_img}" if len(slide["image_blobs"]) > 1 else "")
+                    )
+                    desc = describe_visual_content(img_bytes, "image/png", slide_hint)
+                    if desc and len(desc.strip()) >= MIN_CONTENT_CHARS:
+                        ocr_parts.append(
+                            f"[VISUAL DESCRIPTION]\n{desc.strip()}\n[/VISUAL DESCRIPTION]"
+                        )
+            elif not body:
+                # Original behaviour: OCR only when slide has no body text
+                for img_bytes in slide["image_blobs"]:
+                    ocr_text = ocr_image_bytes(img_bytes, "image/png")
+                    if ocr_text and len(ocr_text.strip()) >= MIN_CONTENT_CHARS:
+                        ocr_parts.append(f"[IMAGE TEXT]\n{ocr_text.strip()}\n[/IMAGE TEXT]")
 
         # ── Assemble chunk content ─────────────────────────────────────────────
         content_parts = []
@@ -2201,7 +2533,7 @@ def process_source(source: SourceEntry, force: bool = False) -> bool:
         elif source.doc_type == "gazette":
             rows = parse_gazette_document(cleaned, source.key, source.name)
         elif source.doc_type in ("others", "slide"):
-            rows = parse_with_ai(cleaned, source.key, source.name)
+            rows = parse_others_document(cleaned, source.key, source.name)
         else:
             logger.error("  Unknown doc_type '%s'. Skipping.", source.doc_type)
             return False
@@ -2308,6 +2640,10 @@ def _sanitize_for_llm(text: str) -> str:
     text = re.sub(r'\[(?:/?)TABLE\]\n?', '', text)
     # Remove image-text wrapper tags from PPTX OCR
     text = re.sub(r'\[(?:/?)IMAGE TEXT\]\n?', '', text)
+    # Remove visual description wrapper tags — keep the description text itself
+    text = re.sub(r'\[/?VISUAL DESCRIPTION\]\n?', '', text)
+    # Remove speaker notes wrapper tags — keep the notes text itself
+    text = re.sub(r'\[/?SPEAKER NOTES\]\n?', '', text)
     # Strip Unicode private-use area and replacement characters
     text = re.sub(r'[\uE000-\uF8FF\uFFFD\uFFFE\uFFFF]', '', text)
     # Normalise to 2 consecutive newlines maximum
@@ -2351,33 +2687,27 @@ def _repair_json_strings(s: str) -> str:
 
     return ''.join(out)
 
-
-def _split_pages_at_boundary(text: str, max_chars: int) -> list:
+def _recover_partial_objects(raw: str) -> list:
     """
-    Split text into page-slices at paragraph boundaries, not mid-character.
-    This prevents the LLM from receiving a fragment that ends mid-sentence.
+    Last-resort recovery for truncated LLM responses.
+    Extracts every syntactically complete flat JSON object {…} from the raw
+    string and returns those that have a non-empty 'content' field.
+    Truncated objects (missing closing quote/brace) are silently skipped.
     """
-    if len(text) <= max_chars:
-        return [text]
-
-    pages = []
-    while len(text) > max_chars:
-        # Prefer paragraph break
-        cut = text.rfind('\n\n', 0, max_chars)
-        if cut == -1 or cut < max_chars // 2:
-            # Fall back to any newline
-            cut = text.rfind('\n', 0, max_chars)
-        if cut == -1 or cut < max_chars // 2:
-            # Fall back to word boundary
-            cut = text.rfind(' ', 0, max_chars)
-        if cut <= 0:
-            cut = max_chars                  # hard cut only as last resort
-        pages.append(text[:cut].strip())
-        text = text[cut:].strip()
-
-    if text:
-        pages.append(text)
-    return pages
+    # Matches a flat object: no nested {} allowed (our schema has none)
+    _OBJ_RE = re.compile(r'\{[^{}]+\}', re.DOTALL)
+    recovered = []
+    for m in _OBJ_RE.finditer(raw):
+        try:
+            obj = json.loads(m.group())
+            if isinstance(obj, dict) and len(str(obj.get('content', ''))) >= 60:
+                recovered.append(obj)
+        except json.JSONDecodeError:
+            continue
+    if recovered:
+        logger.info("  Truncation recovery: rescued %d complete chunk(s).", len(recovered))
+        return recovered
+    raise ValueError("No JSON array found in model response")
 
 def parse_with_ai(
     text: str,
@@ -2393,14 +2723,12 @@ def parse_with_ai(
 
     # ── System message: suppresses thinking output + enforces JSON-only ──────
     CHUNK_SYSTEM = (
-        "/no_think\n"
         "You output ONLY raw JSON. No explanations. No markdown. "
-        "No preamble. No postamble. No code fences."
+        "No preamble. No postamble. No code fences. Be concise."
     )
 
     # ── User prompt ───────────────────────────────────────────────────────────
     CHUNK_PROMPT = """\
-/no_think
 Split the text below into retrieval chunks for a Malaysian legal document system.
 
 OUTPUT RULES — STRICTLY ENFORCED
@@ -2417,12 +2745,12 @@ CHUNKING RULES
 - For Q&A: one chunk = one question + its complete answer.
 
 RESPONSE SCHEMA — each array element:
-{{
+{
   "part":          "PART name or section group, or empty string",
   "section":       "Section number/heading, or empty string",
   "section_title": "Short descriptive title, or empty string",
   "content":       "Full chunk text with \\n for newlines"
-}}
+}
 
 TEXT:
 {text}"""
@@ -2432,7 +2760,7 @@ TEXT:
         start = raw.find('[')
         end   = raw.rfind(']')
         if start == -1 or end == -1 or start >= end:
-            raise ValueError("No JSON array found in model response")
+            return _recover_partial_objects(raw)
         candidate = raw[start:end + 1]
 
         # Pass 1 — direct parse (fast path for well-formed output)
@@ -2455,11 +2783,16 @@ TEXT:
         except json.JSONDecodeError:
             pass
 
-        # Pass 4 — combine both repairs
-        fixed = _repair_json_strings(candidate)
-        fixed = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', fixed)
-        fixed = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', fixed)
-        return json.loads(fixed)   # raise if still broken — triggers fallback
+        try:
+            # Pass 4 — combine both repairs
+            fixed = _repair_json_strings(candidate)
+            fixed = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', fixed)
+            fixed = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', fixed)
+            return json.loads(fixed)   # raise if still broken — triggers fallback
+        except json.JSONDecodeError:
+            pass
+
+        return _recover_partial_objects(raw)
 
     # ── Per-page worker ───────────────────────────────────────────────────────
     def _process_page(args):
@@ -2471,7 +2804,18 @@ TEXT:
         prompt_body = CHUNK_PROMPT.replace("{text}", page_text)
         page_rows   = []
 
+        _input_chars = len(CHUNK_SYSTEM) + len(prompt_body)
+        _input_tokens = _input_chars // 4
+        _adaptive_ctx = max(
+            1024,
+            min(
+                ((_input_tokens + 1000 + 255) // 256) * 256,  # round up to nearest 256
+                4096,                                           # hard ceiling
+            ),
+        )
+
         for attempt in range(2):   # one retry on any failure
+            raw = ""
             try:
                 r = requests.post(
                     "http://localhost:11434/api/chat",
@@ -2482,14 +2826,15 @@ TEXT:
                             {"role": "user",   "content": prompt_body},
                         ],
                         "stream": False,
+                        "think":  False,
                         "options": {
                             "temperature": 0.0,
-                            "num_predict": 3000,
-                            "num_ctx":     6144,
+                            "num_predict": 1000,
+                            "num_ctx":     _adaptive_ctx,
                             "num_gpu":     CHUNK_NUM_GPU,
                         },
                     },
-                    timeout=(10, 180),
+                    timeout=(10, 240),
                 )
 
                 # ── HTTP guard ────────────────────────────────────────────────
@@ -2511,6 +2856,8 @@ TEXT:
 
                 for item in parsed:
                     content = str(item.get("content", "")).strip()
+                    # Restore double-quotes that were placeholder-escaped before LLM call
+                    content = content.replace(_DQUOTE_PLACEHOLDER, '"')
                     if len(content) < 60:
                         continue
                     page_rows.append({
@@ -2528,10 +2875,17 @@ TEXT:
             except Exception as exc:
                 logger.warning(
                     "AI chunking attempt %d failed for page %d: %s",
-                    attempt + 1, page_num, exc,
+                    attempt + 1, page_num, exc
                 )
                 if attempt == 1:   # both attempts failed — store raw text
+                    logger.warning(
+                        "  Both attempts failed for page %d. Raw response was %d chars. "
+                        "Storing as raw fallback chunk.",
+                        page_num, len(raw),
+                    )
                     stripped = page_text.strip()
+                    # Restore double-quotes that were placeholder-escaped before LLM call
+                    stripped = stripped.replace(_DQUOTE_PLACEHOLDER, '"')
                     if len(stripped) >= 60:
                         page_rows.append({
                             "source_key":    source_key,
@@ -2547,9 +2901,26 @@ TEXT:
         return page_num, page_rows
 
     # ── Split and dispatch ─────────────────────────────────────────────────────
-    page_size = 2500   # was 1000 — too small, produced mid-sentence fragments
-    pages   = _split_pages_at_boundary(text, page_size)
-    workers = int(os.environ.get("CHATSSM_CHUNK_WORKERS", "3"))
+    def _split_at_boundaries(text: str, max_chars: int = 2000) -> List[str]:
+        """Split text at sentence boundaries, never mid-sentence."""
+        pages = []
+        current = ""
+        # Split on sentence-ending punctuation followed by whitespace or newline
+        sentences = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            if len(current) + len(sentence) + 1 > max_chars and current:
+                pages.append(current.strip())
+                current = sentence
+            else:
+                current = (current + " " + sentence).strip() if current else sentence
+        if current.strip():
+            pages.append(current.strip())
+        return pages
+    
+    pages   = _split_at_boundaries(text, max_chars=1000)
+    workers = int(os.environ.get("CHATSSM_CHUNK_WORKERS", "2"))
 
     rows_by_page: Dict[int, List[Dict]] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:

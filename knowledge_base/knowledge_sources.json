@@ -19,6 +19,7 @@
     "               gazette  = Malaysian Regulations (numbered paragraph structure)",
     "               general     = Practice Notes, Guidelines, Circulars (numbered paragraphs, headings, free prose)",
     "               faq         = FAQ documents (Q: / A: pairs or numbered Q&A)",
+    "               slide       = Presentation slides",
     "               others      = For any other document types. Uses general parsing with AI cleanup.",
     "  url        - (pdf) public download URL",
     "  local_path - (pdf or csv) absolute path on your machine",
@@ -40,8 +41,57 @@
       "related_to_acts": ["Companies Act 2016"],
       "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/Companies%20Act%202016_Akta%20777_BI%20(1.8.2022).pdf",
       "local_path": null,
-      "enabled":    true
+      "enabled":    false
     },
+
+    {
+      "key":        "roba1956",
+      "name":       "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Registration of Businesses Act 1956"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/ROBA%201956_Act%20197_as%20at%201%20June%202017.pdf",
+      "local_path": null,
+      "enabled":    false
+    },
+
+    {
+      "key":        "llpa2012",
+      "name":       "Limited Liability Partnership Act 2012 (Act 743) - 1 Mar 2017",
+      "category":   "Legislations",
+      "type":       "pdf",
+      "doc_type":   "act",
+      "related_to_acts": ["Limited Liability Partnership Act 2012"],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/LLPA%202012_Act%20743_as%20at%201%20March%202017.pdf",
+      "local_path": null,
+      "enabled":    false
+    },
+
+    {
+      "key":        "act_roc_2016",
+      "name":       "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "category":   "Legislations",
+      "type":       "csv",
+      "related_to_acts": ["Companies Act 2016"]
+    },
+
+    {
+      "key":        "act_rob_1956",
+      "name":       "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017",
+      "category":   "Legislations",
+      "type":       "csv",
+      "related_to_acts": ["Registration of Businesses Act 1956"]
+    },
+
+    {
+      "key":        "act_llp_2012",
+      "name":       "Limited Liability Partnership Act 2012 (Act 743) - 1 Mar 2017",
+      "category":   "Legislations",
+      "type":       "csv",
+      "related_to_acts": ["Limited Liability Partnership Act 2012"]
+    },
+
 
     {
       "key":        "ca_gazette1",
@@ -387,30 +437,6 @@
       "doc_type":   "gazette",
       "related_to_acts": ["Companies Act 2016"],
       "url":        "https://www.ssm.com.my/bm/Pages/Legal_Framework/document/02_PUA%20211%20(2025)_s%2045(4).pdf",
-      "local_path": null,
-      "enabled":    true
-    },
-
-    {
-      "key":        "roba1956",
-      "name":       "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017",
-      "category":   "Legislations",
-      "type":       "pdf",
-      "doc_type":   "act",
-      "related_to_acts": ["Registration of Businesses Act 1956"],
-      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/ROBA%201956_Act%20197_as%20at%201%20June%202017.pdf",
-      "local_path": null,
-      "enabled":    true
-    },
-
-    {
-      "key":        "llpa2012",
-      "name":       "Limited Liability Partnership Act 2012 (Act 743) - 1 Mar 2017",
-      "category":   "Legislations",
-      "type":       "pdf",
-      "doc_type":   "act",
-      "related_to_acts": ["Limited Liability Partnership Act 2012"],
-      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/LLPA%202012_Act%20743_as%20at%201%20March%202017.pdf",
       "local_path": null,
       "enabled":    true
     },
@@ -1086,22 +1112,19 @@
     },
 
     {
-      "_note": "══════════════════════════════════ FORMS ═══════════════════════════════════"
+      "_note": "══════════════════════════════════ SLIDES ═══════════════════════════════════"
     },
 
     {
-      "_note": "Forms are instruction guides, not Q/A or Act structures. Use doc_type=general."
-    },
-
-    {
-      "key":        "form_49",
-      "name":       "Form 49 - Return Giving Particulars in Register of Directors",
-      "category":   "Forms",
+      "key":        "ca_pptx_annualdialogue_sdpiv",
+      "name":       "SSM ANNUAL DIALOGUE 2025 - SSM'S STRATEGIC DIRECTION PLAN IV (SDP IV) (2026 - 2030)",
+      "category":   "Slide",
       "type":       "pdf",
-      "doc_type":   "general",
-      "url":        null,
-      "local_path": "C:\\path\\to\\form_49.pdf",
-      "enabled":    false
+      "doc_type":   "others",
+      "related_to_acts": [],
+      "url":        "https://www.ssm.com.my/Pages/Legal_Framework/Document/SSM%E2%80%99S%20STRATEGIC%20DIRECTION%20PLAN%20IV%20(SDP%20IV)%20(2026%20%E2%80%93%202030)%20-%20En.%20Farid%20Ahmad.pdf",
+      "local_path": null,
+      "enabled":    true
     }
 
   ]
