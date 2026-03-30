@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
 from filelock import FileLock
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Okapi # type: ignore
 from collections import OrderedDict
 
 import numpy as np
@@ -108,9 +108,9 @@ class AppConfig:
     LLM_TEMPERATURE: float = 0.0
     LLM_TOP_P:       float = 0.9
     LLM_TOP_K:       int   = 20
-    LLM_MAX_TOKENS:  int   = 1200
+    LLM_MAX_TOKENS:  int   = 1500
     LLM_TIMEOUT:     int   = 300    # seconds
-    LLM_NUM_CTX: int = 6144   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
+    LLM_NUM_CTX: int = 8192   #Ollama default is 2048; set higher to fit system prompt + long contexts without truncation. Must be >= LLM_MAX_TOKENS + max context chunk size.
     LLM_NUM_GPU:       int = int(os.environ.get("CHATSSM_LLM_NUM_GPU", "-1"))
 
     # ── Embedding ─────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ class AppConfig:
     GLOBAL_TOP_K:         int   = 12   # total chunks sent to LLM
     MAX_CHUNK_CHARS:     int   = 1200  # Truncate chunks in the prompt to this many characters to avoid hitting LLM token limits.
     MAX_TABLE_CHARS:  int = 2500
-    BM25_WEIGHT: float = 0.3  # 30% BM25, 70% vector — legal domain favors semantic
+    BM25_WEIGHT: float = 0.2  # 20% BM25, 80% vector — legal domain favors semantic
 
     # ── Paths ─────────────────────────────────────────────────────────────────
     SOURCES_CONFIG:  str = os.path.join("knowledge_base", "knowledge_sources.json")
@@ -452,20 +452,18 @@ class FormEntry:
     form_id:          str
     form_number:      str
     name:             str
-    name_ms:          str
-    purpose:          str
-    purpose_ms:       str
-    url:              str
-    use_cases:        List[str]
+    links:            List[Dict]
     related_sections: List[str]
-    category:         str
+    resource_type:    str = "form" 
     _embedding:       Optional[np.ndarray] = field(default=None, repr=False)
 
     @property
-    def embed_text(self) -> str:
-        """Text used for semantic similarity — purpose + use cases."""
-        return f"{self.name}. {self.purpose}. " + " ".join(self.use_cases)
+    def primary_url(self) -> str:
+        if self.links:
+            return self.links[0].get("url", "")
+        return ""
 
+_ASK_USER_SENTINEL = object()
 
 class FormRegistry:
     """
@@ -489,9 +487,54 @@ class FormRegistry:
         re.IGNORECASE,
     )
 
-    MAX_FORMS_EXPLICIT = 2
-    MAX_FORMS_IMPLICIT = 2
+    _ACTION_RE = re.compile(
+        r'\b(?:'
+        r'how\s+(?:to|do\s+I|can\s+I)\b'
+        r'|where\s+(?:to|do\s+I|can\s+I|should\s+I)\b'        
+        r'|cara\b'
+        r'|nak\s+(?:daftar|hantar|kemukakan|tukar|ubah|mohon|laksana)\b'
+        r'|steps?\s+to\b|procedure\s+(?:to|for)\b'
+        r'|(?:apply|applying)\s+for\b'
+        r'|register\s+(?:a|my|our|as|with|for)\b'              
+        r'|registering\s+(?:a|my|our|as|with|for)\b'
+        r'|(?:submit|lodge|file|convert|change)\s+(?:a|the|my|an)\b'
+        r'|langkah[-\s]langkah\b|tatacara\b'
+        r'|(?:tukar|daftar|kemukakan|mohon|hantar)\s+\w+'
+        r'|di\s+mana\s+(?:nak|untuk|boleh)\b'                  
+        r')',
+        re.IGNORECASE,
+    )
+    _INFORMATIONAL_RE = re.compile(
+        r'\b(?:what\s+(?:is|are|happens?|if|does|did|do)|'
+        r'what\'s\b|'
+        r'tell\s+me\s+(?:about|what|how)\b|'
+        r'explain\s+(?:section|the|what|how|why)\b|'
+        r'describe\b|'
+        r'penalty|penalti|denda|offence|kesalahan|'
+        r'requirement|keperluan|syarat|'
+        r'difference|perbezaan|beza|'
+        r'explain|terangkan|jelaskan|'
+        r'why|mengapa|sebab)\b',
+        re.IGNORECASE,
+    )
+
+    _FORM_REQUEST_RE = re.compile(
+        r'\b(?:'
+        r'give\s+me\s+(?:the\s+)?(?:form|borang)'
+        r'|show\s+(?:me\s+)?(?:the\s+)?(?:form|borang)'
+        r'|what\s+form\s+(?:do\s+I|should\s+I|is\s+needed)'
+        r'|(?:provide|send|get)\s+(?:me\s+)?(?:the\s+)?(?:form|borang)'
+        r'|(?:minta|dapatkan|tunjuk)\s+(?:borang|form)'
+        r'|borang\s+(?:apa|mana|yang)'
+        r')',
+        re.IGNORECASE,
+    )
+
+    MAX_FORMS_EXPLICIT = 3   # hard cap for explicit form number requests
+    MAX_FORMS_IMPLICIT = 4   # hard cap for context-derived matching; dynamic logic may return fewer
     SEMANTIC_THRESHOLD = 0.60
+
+    
 
     def __init__(self, emb: "EmbeddingService") -> None:
         self._emb   = emb
@@ -507,6 +550,12 @@ class FormRegistry:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
             for d in data:
+                # Backward-compat: if old record has "url" but no "links",
+                # promote it to a single-item links list with type "pdf"
+                if "url" in d and "links" not in d:
+                    d["links"] = [{"type": "pdf", "url": d.pop("url")}]
+                elif "url" in d:
+                    d.pop("url")   # drop redundant old field if links already present
                 self._forms.append(FormEntry(**{
                     k: v for k, v in d.items()
                     if k in FormEntry.__dataclass_fields__
@@ -515,67 +564,271 @@ class FormRegistry:
         except Exception as exc:
             logger.error("FormRegistry: failed to load forms.json: %s", exc)
 
-    def _embed_forms(self) -> None:
-        """Lazily embed all forms on first semantic query."""
-        unembedded = [f for f in self._forms if f._embedding is None]
-        if not unembedded:
-            return
-        texts = [f.embed_text for f in unembedded]
-        vecs  = self._emb.embed_batch(texts)
-        for form, vec in zip(unembedded, vecs):
-            form._embedding = vec
-
     def detect(
         self,
         query: str,
-        query_vec: Optional[np.ndarray] = None,
-    ) -> List[FormEntry]:
+        search_query: str = "",
+        result_chunks: Optional[List[str]] = None,
+        last_sections: Optional[Dict[tuple, int]] = None,
+    ) -> list:
         """
-        Return matched forms for a query.
-        Returns [] when no match or insufficient confidence.
+        Strict section-first form retrieval.
+
+        Returns only forms whose linked sections are the DOMINANT sections
+        in the retrieved context.  Never guesses or falls back to generic forms.
+
+        Two bugs fixed vs previous version:
+          1. _SEC_RE had a \\b that prevented subsection capture — '41(1)' was
+             parsed as '41' with no child, making subsection discrimination impossible.
+          2. All retrieved sections were weighted equally, so incidental sections
+             (e.g. Section 14 mentioned once in a 12-chunk answer about Section 40)
+             competed on equal footing with the dominant section.
+
+        Scoring now weights each section match by the number of chunks it appears
+        in.  A section mentioned in 3 of 12 chunks outscores one mentioned once.
         """
+
         if not self._forms:
             return []
 
-        query_lower = query.lower()
+        # ── Corrected section extraction regex ────────────────────────────────
+        # The original pattern r'\bsection\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?\b'
+        # had \\b BETWEEN groups which matched before '(' in '41(1)' — causing
+        # the subsection to never be captured.  Fixed by replacing terminal \\b
+        # with a lookahead that works after optional ')'.
+        _SEC_RE = re.compile(
+            r'\b(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?'
+            r'(?=\b|\s|\.|,|;|\)|\(|$)',
+            re.IGNORECASE,
+        )
 
-        # ── Mode 1: Explicit form request ─────────────────────────────────────
+        # ── Gate 0: Explicit section reference in user query ──────────────────
+        # Only enter this path if the query is NOT purely informational.
+        # A query like "what is section 40" mentions a section but does not
+        # require a form — the user wants to understand the law, not file anything.
+        # Allow through if: (a) no informational signal, OR (b) action intent present.
+        _is_informational_only = (
+            self._INFORMATIONAL_RE.search(query) is not None
+            and self._ACTION_RE.search(query) is None
+        )
+        if not _is_informational_only:
+            query_section_refs: set = set()
+            for m in _SEC_RE.finditer(query):
+                query_section_refs.add((m.group(1).lower(), m.group(2).lower() if m.group(2) else None))
+
+            if query_section_refs:
+                scored = []
+                for form in self._forms:
+                    sec_entries = [
+                        rs for rs in form.related_sections
+                        if not rs.lower().startswith("companies act")
+                        and not rs.lower().startswith("llp act")
+                    ]
+                    score = sum(self._score_ref(rs, query_section_refs) for rs in sec_entries)
+                    if score >= 2 or (score == 1 and len(sec_entries) == 1):
+                        scored.append((score, form))
+                if scored:
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    st.session_state["_last_sections"] = {ref: 1 for ref in query_section_refs}
+                    return self._pdf_only([f for _, f in scored[:self.MAX_FORMS_EXPLICIT]])
+                # No form matches the explicitly cited section — return nothing
+                return []
+
+        # ── Gate 1: Explicit form number request ──────────────────────────────
         if self._EXPLICIT_RE.search(query):
-            # Try to match a specific form number
             num_match = re.search(
-                r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?)', query, re.IGNORECASE
+                r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?)',
+                query, re.IGNORECASE,
             )
             if num_match:
                 target = num_match.group(1).strip().lower()
                 exact = [
                     f for f in self._forms
-                    if target in f.form_number.lower()
+                    if f.form_number and target in f.form_number.lower()
                 ]
                 if exact:
-                    return exact[:self.MAX_FORMS_EXPLICIT]
+                    return self._pdf_only(exact[:self.MAX_FORMS_EXPLICIT])
+                
+        # ── Gate 1.5: Follow-up form request — reuse previous section context ─────
+        if self._FORM_REQUEST_RE.search(query) and last_sections:
+            # User is explicitly asking for a form from the previous procedure.
+            # Skip all action/informational gates and go straight to scoring
+            # using the sections we already know are relevant.
+            _prev_refs = set(last_sections.keys())
+            _prev_max  = max(last_sections.values())
 
-            # Generic form request — fall through to semantic
-            pass
+            def _prev_weighted(rs_string: str) -> float:
+                m = re.match(
+                    r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
+                    rs_string.strip(), re.IGNORECASE,
+                )
+                if not m:
+                    return 0.0
+                f_parent = m.group(1).lower()
+                f_child  = m.group(2).lower() if m.group(2) else None
+                for r_parent, r_child in _prev_refs:
+                    if r_parent != f_parent:
+                        continue
+                    freq = last_sections[(r_parent, r_child)]
+                    if f_child is not None and r_child is not None:
+                        if f_child == r_child:
+                            return 2.0 * freq
+                        continue
+                    return 1.0 * freq
+                return 0.0
 
-        # ── Mode 2: Implicit intent — only if query has procedural language ───
-        if not self._IMPLICIT_RE.search(query):
-            return []   # query is not procedural — no form suggestion
+            prev_scored = []
+            for form in self._forms:
+                sec_entries = [
+                    rs for rs in form.related_sections
+                    if not rs.lower().startswith("companies act")
+                    and not rs.lower().startswith("llp act")
+                ]
+                total = sum(_prev_weighted(rs) for rs in sec_entries)
+                if total > 0:
+                    prev_scored.append((total, form))
 
-        if query_vec is None:
+            if prev_scored:
+                prev_scored.sort(key=lambda x: x[0], reverse=True)
+                return self._pdf_only([f for _, f in prev_scored[:self.MAX_FORMS_EXPLICIT]])
+            # Previous context found but no form matches — ask user to clarify
+            return [_ASK_USER_SENTINEL]
+
+        # ── Gate 2a: Action intent required ───────────────────────────────────
+        check_text = query + " " + search_query
+        if not self._ACTION_RE.search(check_text):
             return []
 
-        self._embed_forms()
+        # ── Gate 2b: Block pure informational queries ─────────────────────────
+        if self._INFORMATIONAL_RE.search(query):
+            return []
 
-        scored: List[Tuple[float, FormEntry]] = []
+        # ── Gate 3: Frequency-weighted section matching ────────────────────────
+        # Build a frequency map: how many individual chunks mention each section.
+        # Sections appearing in more chunks are more central to the answer.
+        if not result_chunks:
+            return []
+
+        section_freq: Dict[tuple, int] = {}
+        for chunk in result_chunks:
+            chunk_refs: set = set()
+            for m in _SEC_RE.finditer(chunk):
+                chunk_refs.add((m.group(1).lower(), m.group(2).lower() if m.group(2) else None))
+            for ref in chunk_refs:
+                section_freq[ref] = section_freq.get(ref, 0) + 1
+
+        if not section_freq:
+            return [_ASK_USER_SENTINEL]
+
+        all_refs = set(section_freq.keys())
+        # Dominant frequency: how many chunks does the most-cited section appear in
+        max_freq = max(section_freq.values())
+
+        def _weighted_score(rs_string: str) -> float:
+            m = re.match(
+                r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
+                rs_string.strip(), re.IGNORECASE,
+            )
+            if not m:
+                return 0.0
+            f_parent = m.group(1).lower()
+            f_child  = m.group(2).lower() if m.group(2) else None
+
+            best = 0.0
+            for r_parent, r_child in all_refs:
+                if r_parent != f_parent:
+                    continue
+                freq = section_freq[(r_parent, r_child)]
+                if f_child is not None and r_child is not None:
+                    if f_child == r_child:
+                        base = 2.0                    # exact subsection match
+                    else:
+                        continue                      # different subsection — skip
+                else:
+                    base = 1.0                        # parent-level match
+                best = max(best, base * freq)
+            return best
+
+        scored = []
         for form in self._forms:
-            if form._embedding is None:
+            sec_entries = [
+                rs for rs in form.related_sections
+                if not rs.lower().startswith("companies act")
+                and not rs.lower().startswith("llp act")
+            ]
+            if not sec_entries:
                 continue
-            score = float(np.dot(query_vec, form._embedding))
-            if score >= self.SEMANTIC_THRESHOLD:
-                scored.append((score, form))
+
+            total = sum(_weighted_score(rs) for rs in sec_entries)
+            if total == 0:
+                continue
+
+            # Require that this form's section is sufficiently dominant.
+            # "Dominant" = the section appears in at least HALF as many chunks
+            # as the most-cited section.  This blocks forms linked to incidental
+            # sections (mentioned once) when the answer is primarily about a
+            # different section (mentioned multiple times).
+            form_max_freq = 0.0
+            for rs in sec_entries:
+                m2 = re.match(
+                    r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
+                    rs.strip(), re.IGNORECASE,
+                )
+                if not m2:
+                    continue
+                fp, fc = m2.group(1).lower(), (m2.group(2).lower() if m2.group(2) else None)
+                for ref in all_refs:
+                    if ref[0] == fp:
+                        form_max_freq = max(form_max_freq, section_freq[ref])
+
+            # Gate: form's section must appear in ≥ 50% of max_freq chunks
+            # Exception: if only one distinct section exists in chunks, no gate
+            distinct_parents = len({r[0] for r in all_refs})
+            if distinct_parents > 1 and form_max_freq < max_freq * 0.5:
+                logger.debug(
+                    "FormRegistry: skipping '%s' — section freq %.0f < 50%% of max %.0f",
+                    form.name[:40], form_max_freq, max_freq,
+                )
+                continue
+
+            scored.append((total, form))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [f for _, f in scored[:self.MAX_FORMS_IMPLICIT]]
+        # Dynamic form limit:
+        #   • Single dominant section → max 2 (one procedure, avoid overload)
+        #   • Multiple dominant sections → up to 4 (complex workflow may need several)
+        #   • Hard cap at MAX_FORMS_IMPLICIT to prevent overwhelming the user
+        n_dominant = sum(1 for ref in all_refs if section_freq[ref] >= max_freq * 0.5)
+        dynamic_limit = min(max(2, n_dominant * 2), self.MAX_FORMS_IMPLICIT)
+        return self._pdf_only([f for _, f in scored[:dynamic_limit]])
+
+    @staticmethod
+    def _score_ref(rs_string: str, ref_pool: set) -> int:
+        """Score one form section string against a pool of (parent, child) refs."""
+        m = re.match(
+            r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
+            rs_string.strip(), re.IGNORECASE,
+        )
+        if not m:
+            return 0
+        f_parent = m.group(1).lower()
+        f_child  = m.group(2).lower() if m.group(2) else None
+        for r_parent, r_child in ref_pool:
+            if r_parent != f_parent:
+                continue
+            if f_child is not None and r_child is not None:
+                return 2 if f_child == r_child else 0
+            return 1
+        return 0
+
+    @staticmethod
+    def _pdf_only(forms: List["FormEntry"]) -> List["FormEntry"]:
+        """Keep forms that have at least one usable link (pdf or portal)."""
+        _VALID = {"pdf", "portal", "platform"}
+        return [
+            f for f in forms
+            if any(l.get("type") in _VALID for l in f.links)
+        ]
 
     def reload(self) -> None:
         self._forms.clear()
@@ -964,7 +1217,7 @@ class DocumentIndex:
         # Use re.findall (same tokenizer as index build) so punctuation is stripped:
         # "business?" → ["business"] not "business?" which has zero BM25 match.
         tokens = re.findall(r'[a-z0-9]+', query_text.lower())
-        bm25_raw = np.array(self._bm25.get_scores(tokens), dtype=np.float32)
+        bm25_raw = np.array(self._bm25.get_scores(tokens), dtype=np.float32) # type: ignore
         b_max = bm25_raw.max()
         if b_max > 0:
             bm25_raw = bm25_raw / b_max
@@ -1716,7 +1969,7 @@ class ConversationMemory:
     """
     MAX_RAW_TURNS:    int = 4     # turns kept verbatim
     MAX_HIST_TOKENS:  int = 250   # hard token budget for history block
-    REWRITE_THRESHOLD: int = 8    # queries shorter than this word count get rewritten
+    REWRITE_THRESHOLD: int = 5    # queries shorter than this word count get rewritten
 
     _turns: List[Dict] = field(default_factory=list)
 
@@ -1842,7 +2095,7 @@ _OOS_PATTERN = re.compile(
     r"|(?:the\s+)?(?:documents|information)\s+(?:I\s+have\s+access\s+to|available\s+to\s+me)"
     r"|Saya tidak dapat menemui maklumat ini"
     r"|Saya tidak menjumpai maklumat ini"
-    r"|tidak terdapat dalam pengetahuan saya)",
+    r"|tidak terdapat dalam pengetahuan saya|Saya tidak menemui maklumat ini)",
     re.IGNORECASE,
 )
 
@@ -3011,32 +3264,115 @@ def _header() -> None:
         )
 
 def _render_form_cards(forms: List[FormEntry], lang: str = "en") -> None:
-    """Render compact form suggestion cards below the LLM answer."""
     if not forms:
         return
 
-    label = "📋 Borang Berkaitan" if lang == "ms" else "📋 Relevant Forms"
-    st.markdown(f"<div style='margin-top:12px;'><small><b>{label}</b></small></div>",
-                unsafe_allow_html=True)
+    st.markdown(
+        "<hr style='margin:12px 0 8px 0; border-color:#e0e0e0'>",
+        unsafe_allow_html=True,
+    )
+
+    _SEC_FILTER = re.compile(r'\bsection\b|\bseksyen\b', re.IGNORECASE)
 
     for form in forms:
-        name    = form.name_ms    if lang == "ms" else form.name
-        purpose = form.purpose_ms if lang == "ms" else form.purpose
+        name = form.name
+        is_platform = form.resource_type == "platform"
+        display_links = [
+            l for l in (form.links or [])
+            if l.get("type") == ("portal" if is_platform else "pdf")
+        ]
+        icon = "🔗" if is_platform else "📄"
+
+        # ── Bridge text — derived from form's own section references ──────────
+        sec_refs = [s for s in form.related_sections if _SEC_FILTER.search(s)]
+        act_refs = [s for s in form.related_sections if not _SEC_FILTER.search(s)]
+        act_name = act_refs[0] if act_refs else ""
+        if sec_refs:
+            sec_str = ", ".join(sec_refs[:2])
+            citation = f"{sec_str} of the {act_name}" if act_name else sec_str
+        else:
+            citation = ""
+
+        if lang == "ms":
+            bridge = (
+                f"Untuk meneruskan proses ini di bawah {citation}:" if citation
+                else "Untuk meneruskan proses ini, anda perlu mengemukakan borang berikut:"
+            )
+        else:
+            bridge = (
+                f"To complete this step, you will need to submit the following form, "
+                f"which corresponds to {citation}:" if citation
+                else "To complete this step, you will need to submit the following form:"
+            )
+
+        st.markdown(
+            f"<div style='margin-top:8px;color:#555;font-size:0.88em'>{bridge}</div>",
+            unsafe_allow_html=True,
+        )
 
         with st.container(border=True):
-            col_info, col_btn = st.columns([5, 1])
-            with col_info:
-                st.markdown(
-                    f"**📄 {form.form_number}** — {name}\n\n"
-                    f"<small style='color:#666'>{purpose}</small>",
-                    unsafe_allow_html=True,
-                )
-            with col_btn:
-                st.link_button(
-                    "📥" if lang == "ms" else "📥",
-                    url=form.url,
-                    help=f"Download {form.form_number}",
-                )
+            n_btns = max(len(display_links), 1)
+            cols = st.columns([7] + [1] * n_btns)
+            with cols[0]:
+                label = f"{form.form_number} — {name}" if form.form_number else name
+                st.markdown(f"**{icon} {label}**")
+            if display_links:
+                for idx, link in enumerate(display_links):
+                    lurl = link.get("url", "")
+                    with cols[idx + 1]:
+                        if lurl:
+                            btn = "🔗" if is_platform else "📥"
+                            st.link_button(btn, url=lurl, help=f"Download {form.form_number or name} (PDF)")
+            else:
+                with cols[1]:
+                    st.caption("—")
+
+def _inject_form_links(text: str, forms: List[FormEntry]) -> str:
+    appended = []   # track forms that needed appending (not found inline)
+
+    for form in forms:
+        pdf_links    = [l for l in form.links if l.get("type") == "pdf"]
+        portal_links = [l for l in form.links if l.get("type") in ("portal", "platform")]
+        url = (pdf_links or portal_links or [{}])[0].get("url", "")
+        if not url:
+            continue
+
+        already_linked = f"]({url})" in text
+        injected = False
+
+        # ── Strategy 1: exact full name ────────────────────────────────────
+        if not already_linked:
+            escaped = re.escape(form.name)
+            pattern = re.compile(r'(?<!\[)' + escaped + r'(?!\]\()', re.IGNORECASE)
+            linked  = f"[{form.name}]({url})"
+            new_text = pattern.sub(linked, text, count=1)
+            if new_text != text:
+                text = new_text
+                injected = True
+
+        # ── Strategy 2: form_number fallback ──────────────────────────────
+        if not injected and form.form_number and not already_linked:
+            num_escaped = re.escape(form.form_number)
+            num_pattern = re.compile(r'(?<!\[)\b' + num_escaped + r'\b(?!\]\()', re.IGNORECASE)
+            linked_num  = f"[{form.form_number}]({url})"
+            new_text = num_pattern.sub(linked_num, text, count=1)
+            if new_text != text:
+                text = new_text
+                injected = True
+
+        # ── Strategy 3: guaranteed fallback — append if LLM never named the form ─
+        if not injected and not already_linked:
+            appended.append(f"[{form.name}]({url})")
+
+    if appended:
+        # Append one natural sentence listing all unlinked forms
+        if len(appended) == 1:
+            suffix = f"\n\nYou can access the relevant form here: {appended[0]}"
+        else:
+            suffix = "\n\nYou can access the relevant forms here: " + ", ".join(appended)
+        text = text.rstrip() + suffix
+
+    return text
 
 def _render_messages() -> None:
     history = st.session_state.get("chat_history", [])
@@ -3069,14 +3405,16 @@ def _render_messages() -> None:
             if msg.get("forms"):
                 forms_from_history = [
                     FormEntry(
-                        form_id="", form_number=f["form_number"], name=f["name"],
-                        name_ms=f["name_ms"], purpose=f["purpose"],
-                        purpose_ms=f["purpose_ms"], url=f["url"],
-                        use_cases=[], related_sections=[], category="",
+                        form_id="", form_number=f.get("form_number", ""), name=f["name"],
+                        links=f.get("links") or (
+                            [{"type": "pdf", "url": f["url"]}] if f.get("url") else []
+                        ),
+                        related_sections=[],
+                        resource_type=f.get("resource_type", "form"),
                     )
                     for f in msg["forms"]
                 ]
-                _render_form_cards(forms_from_history, lang="en")
+
             cats = msg.get("categories_hit", [])
             if cats:
                 badge_html = " ".join(
@@ -3316,13 +3654,22 @@ def main() -> None:
             "<script>setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 400);</script>",
             unsafe_allow_html=True,
         )
-
+    
     prefill_val = st.session_state.pop("prefill", "")
     user_input = st.chat_input(
         "Ask anything...",
         key="chat_input",
         max_chars=2000,
     ) or prefill_val
+
+    if st.session_state.pop("force_show_forms", False) and user_input:
+        st.session_state["pending_form_query"] = user_input
+
+    # Check if user confirmed a pending form request
+    pending_q = st.session_state.pop("pending_form_query", None)
+    if pending_q:
+        # Treat as if user asked for forms directly for the pending query
+        user_input = pending_q   # re-run with original query, forms will now show
 
     if user_input and user_input.strip():
         if not selected_keys:
@@ -3379,11 +3726,72 @@ def main() -> None:
             )
             form_reg    = _form_registry()
             query_vec   = _emb().embed(search_query)   # already cached from kb.search
-            matched_forms = form_reg.detect(user_input, query_vec=query_vec)
+            matched_forms_raw = form_reg.detect(
+                user_input,
+                search_query=search_query,  
+                result_chunks=result.get("chunks", []),
+                last_sections=st.session_state.get("_last_sections"),
+            )
+            # Separate sentinel from real form list
+            ask_user_for_form = (
+                len(matched_forms_raw) == 1
+                and matched_forms_raw[0] is _ASK_USER_SENTINEL
+            )
+            matched_forms: List[FormEntry] = (
+                [] if ask_user_for_form 
+                else [f for f in matched_forms_raw if isinstance(f, FormEntry)]
+            )
+
+            if matched_forms and result.get("chunks"):
+                _sec_re = re.compile(
+                    r'\b(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?'
+                    r'(?=\b|\s|\.|,|;|\)|\(|$)',
+                    re.IGNORECASE,
+                )
+                _freq: Dict[tuple, int] = {}
+                for chunk in result["chunks"]:
+                    seen = set()
+                    for m in _sec_re.finditer(chunk):
+                        ref = (m.group(1).lower(), m.group(2).lower() if m.group(2) else None)
+                        if ref not in seen:
+                            seen.add(ref)
+                            _freq[ref] = _freq.get(ref, 0) + 1
+                if _freq:
+                    st.session_state["_last_sections"] = _freq
+            
             rc = _response_cache()
             cached = rc.get(user_input, selected_keys, cat_filter, lang)
-
             patches  = opt.get_patches()
+
+            if matched_forms:
+                form_lines = "\n".join(
+                    f"  • {f.name}" + (f" ({f.form_number})" if f.form_number else "")
+                    for f in matched_forms
+                )
+                if lang == "ms":
+                    form_hint = (
+                        f"\nARahan BORANG (WAJIB IKUT):\n"
+                        f"Borang berikut diperlukan untuk prosedur ini:\n{form_lines}\n"
+                        f"Anda MESTI menyebut nama borang di atas dengan TEPAT seperti yang ditulis "
+                        f"(jangan singkat, paraphrase, atau ubah nama) dalam satu ayat semula jadi "
+                        f"di penghujung jawapan anda.\n"
+                        f"Contoh: \"Anda perlu mengemukakan [nama borang tepat] kepada Pendaftar.\"\n"
+                        f"Jangan nyatakan URL atau pautan.\n"
+                    )
+                else:
+                    form_hint = (
+                        f"\nFORM INSTRUCTION (MANDATORY):\n"
+                        f"The following form(s) are required for this procedure:\n{form_lines}\n"
+                        f"You MUST write the form name(s) EXACTLY as shown above — do NOT shorten, "
+                        f"paraphrase, or rename them. Include the exact name in one natural sentence "
+                        f"at the end of your answer.\n"
+                        f"Example: \"You will need to submit the [exact form name] to the Registrar.\"\n"
+                        f"Do NOT include any URL or link.\n"
+                    )
+            else:
+                form_hint = ""
+
+            
 
         response = (
                     "No relevant sections were found in the selected knowledge sources. "
@@ -3393,6 +3801,8 @@ def main() -> None:
 
         if cached:
             response = cached["response"]
+            if matched_forms:
+                response = _inject_form_links(response, matched_forms)
             with st.chat_message("assistant", avatar="⚖️"):
                 stream_box = st.empty()
                 words = response.split(" ")
@@ -3403,6 +3813,23 @@ def main() -> None:
                         stream_box.markdown(buf + "▌")
                         time.sleep(0.04)
                 stream_box.markdown(response)  # final render with full formatting
+                
+                if ask_user_for_form:
+                    msg = (
+                        "Berdasarkan soalan anda, prosedur ini mungkin memerlukan borang. "
+                        "Adakah anda ingin saya paparkan borang yang berkaitan?"
+                        if lang == "ms" else
+                        "Based on your question, this process may require a form. "
+                        "Would you like me to show the relevant form?"
+                    )
+                    st.info(msg, icon="📋")
+                    col_yes, col_no, _ = st.columns([2, 2, 6])
+                    if col_yes.button("✅ Yes, show form", key=f"form_yes_{qa_id}"):
+                        st.session_state["prefill"] = user_input   # triggers chat input prefill
+                        st.session_state["force_show_forms"] = True
+                        st.rerun()
+                    if col_no.button("❌ No thanks", key=f"form_no_{qa_id}"):
+                        st.session_state.pop("pending_form_query", None)
         else:
             if not result["chunks"]:
                 with st.chat_message("assistant", avatar="⚖️"):
@@ -3457,7 +3884,7 @@ def main() -> None:
 
                 prompt = (
                     f"/no_think\n{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
-                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}"
+                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}{form_hint}"
                     f"Before writing, identify the single most relevant section in the CONTEXT above.\n"
                     f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
                 )
@@ -3494,8 +3921,13 @@ def main() -> None:
 
                     raw = "".join(raw_tokens)
 
-                    if len(raw.strip()) < 30 and not raw.startswith("❌"):
-                        logger.warning("LLM returned near-empty response; retrying once.")
+                    truncated = (
+                        raw.strip()
+                        and not re.search(r'[.!?)\]`*|\-\w]\s*$', raw, re.IGNORECASE)
+                        and not raw.startswith("❌")
+                    )
+                    if (len(raw.strip()) < 30 or truncated) and not raw.startswith("❌"):
+                        logger.warning("LLM response too short or truncated; retrying once.")
                         stream_box.markdown("_Response was too short, retrying once..._")
                         raw_tokens = []
 
@@ -3527,11 +3959,29 @@ def main() -> None:
 
                     if raw.strip():
                         response = llm._postprocess(raw, lang=lang)
+                        if matched_forms:
+                            response = _inject_form_links(response, matched_forms)
                         if not _OOS_PATTERN.search(response):
                             rc.put(user_input, selected_keys, cat_filter,
                                 response, result.get("citations", []), result.get("categories_hit", []), lang)
-                        stream_box.markdown(response)  # Finalize the response display (remove the "▌" cursor)
-                        _render_form_cards(matched_forms, lang=lang)
+                        stream_box.markdown(response)
+                    elif ask_user_for_form:
+                        confirm_msg = (
+                            "Berdasarkan soalan anda, prosedur ini mungkin memerlukan borang. "
+                            "Adakah anda ingin saya paparkan borang yang berkaitan?"
+                            if lang == "ms" else
+                            "Based on your question, this process may require a form to be submitted. "
+                            "Would you like me to show the relevant form?"
+                        )
+                        st.info(confirm_msg, icon="📋")
+                        col_yes, col_no, _ = st.columns([2, 2, 6])
+                        if col_yes.button("✅ Yes, show form", key=f"form_yes_{qa_id}"):
+                            st.session_state["prefill"] = user_input
+                            st.session_state["force_show_forms"] = True
+                            st.rerun()
+                        if col_no.button("❌ No thanks", key=f"form_no_{qa_id}"):
+                            st.session_state.pop("pending_form_query", None)
+                            st.session_state.pop("force_show_forms", None)
 
         timestamp = datetime.now().isoformat()
         qa_id     = _make_qa_id(user_input, timestamp)
@@ -3550,8 +4000,12 @@ def main() -> None:
             "timestamp":      timestamp,
             "cache_key":      ResponseCache._make_key(user_input, selected_keys, cat_filter, lang),
             "forms": [
-                {"form_number": f.form_number, "name": f.name, "name_ms": f.name_ms,
-                "purpose": f.purpose, "purpose_ms": f.purpose_ms, "url": f.url}
+                {
+                    "form_number": f.form_number,
+                    "name":        f.name,
+                    "resource_type": f.resource_type,
+                    "links": [l for l in f.links if l.get("type") in ("pdf", "portal", "platform")],
+                }
                 for f in matched_forms
             ],
         }
