@@ -29,7 +29,7 @@ Examples:
 
 Valid <Category> folder names:
     Legislations | Practice Notes | Practice Directives |
-    Guidelines   | Circular       | FAQ | Forms
+    Guidelines   | Circular       | FAQ 
 
 Valid <doc_type> folder names:
     act      – Malaysian Acts (PART → Division → Section structure)

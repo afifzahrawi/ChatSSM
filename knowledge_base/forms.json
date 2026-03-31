@@ -1,35 +1,1489 @@
 [
   {
-    "form_id": "ssm-form-49",
-    "form_number": "Form 49",
-    "name": "Return Giving Particulars in Register of Directors, Managers and Secretaries",
-    "name_ms": "Borang 49 — Butiran dalam Daftar Pengarah, Pengurus dan Setiausaha",
-    "purpose": "Notify SSM of changes to directors, managers, or secretaries of a company.",
-    "purpose_ms": "Memberitahu SSM mengenai perubahan pengarah, pengurus atau setiausaha syarikat.",
-    "url": "https://www.ssm.com.my/...",
-    "use_cases": [
-      "appointing a new director",
-      "removing a director",
-      "change of company secretary",
-      "notifying SSM of management changes"
+    "form_id": "ca_form_registration_application",
+    "form_number": "",
+    "name": "Application For Registration",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/incorp_superform.pdf"}
     ],
-    "related_sections": ["Section 58", "Section 237"],
-    "category": "Directors"
+    "related_sections": ["Section 14", "Companies Act 2016"]
   },
   {
-    "form_id": "ssm-form-24",
-    "form_number": "Form 24",
-    "name": "Return of Allotment of Shares",
-    "name_ms": "Borang 24 — Penyata Peruntukan Saham",
-    "purpose": "Notify SSM when new shares are allotted to shareholders.",
-    "purpose_ms": "Memberitahu SSM apabila saham baru diperuntukkan kepada pemegang saham.",
-    "url": "https://www.ssm.com.my/...",
-    "use_cases": [
-      "allotting shares to new shareholders",
-      "increasing share capital",
-      "return of allotment"
+    "form_id": "ca_form_names_reservation",
+    "form_number": "",
+    "name": "Application For Availability Of Names And Reservation",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/nr.pdf"}
     ],
-    "related_sections": ["Section 75"],
-    "category": "Shares"
+    "related_sections": ["Section 27(1)", "Section 27(4)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_first_secretary",
+    "form_number": "",
+    "name": "Notification Of Appointment Of First Secretary",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Format%20S58%20236(2)%20Appointment%20First%20Cosec.pdf"}
+    ],
+    "related_sections": ["Section 58", "Section 236(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_registration_clbg",
+    "form_number": "",
+    "name": "Application For Registration Of A Company Limited By Guarantee",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/incorp_s%2014%20Sch%20B%20clbg_100422.pdf"}
+    ],
+    "related_sections": ["Section 14", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appeal_minister",
+    "form_number": "",
+    "name": "Appeal To Minister Against Decision Of Registrar",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/3._appeal_to_minister_against_decision_of_registrar_-_section_273.pdf"}
+    ],
+    "related_sections": ["Section 27(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_name",
+    "form_number": "Form 13A & 11",
+    "name": "Application For Change Of Name",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Application%20for%20change%20of%20name%20s%2028(4)%20r1.pdf"}
+    ],
+    "related_sections": ["Section 28", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_name_by_registrar",
+    "form_number": "",
+    "name": "Application For Change Of Company Name By Power Of Registrar To Direct A Change Of Name",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Borang%20s%2027%20s%2029%20name%20change%20on%20direction%20of%20Registrar.pdf"}
+    ],
+    "related_sections": ["Section 29(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_lodgement_constitution",
+    "form_number": "Memorandum and Articles of Associaton",
+    "name": "Lodgement Of Constitution (For Adoption Of New Constitution By Existing Companies)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/5._lodgement_of_constitution_-_section_32.pdf"}
+    ],
+    "related_sections": ["Section 32", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_alteration_to_constitution",
+    "form_number": "Form 11",
+    "name": "Notification Of Alteration Or Amendment To Constitution",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/notification_of_alteration_or_amendment_to_constitution_-_section_36_amend%20050624.pdf"}
+    ],
+    "related_sections": ["Section 36", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_alteration_to_constitution_court_copy",
+    "form_number": "Form 11",
+    "name": "Notification Of Alteration Or Amendment To Constitution (Court Copy)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/7._notification_of_alteration_or_amendment_to_constitutioncourt_-_section_37.pdf"}
+    ],
+    "related_sections": ["Section 37", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_convert_unlimited_to_limited",
+    "form_number": "Form 11",
+    "name": "Notice Of Conversion From An Unlimited Company To A Limited Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/8._notice_of_conversion_from_an_unlimited_company_to_a_limited_company_-_section_40.pdf"}
+    ],
+    "related_sections": ["Section 40", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_convert_public_to_private",
+    "form_number": "Form 11",
+    "name": "Notice Of Conversion From A Public Company To A Private Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/9._notice_of_conversion_from_a_public_company_to_a_private_company_-_section_41(1).pdf"}
+    ],
+    "related_sections": ["Section 41(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_convert_private_to_public",
+    "form_number": "Form 11 & 18",
+    "name": "Notice Of Conversion From A Private Company To A Public Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/10._notice_of_conversion_from_a_private_company_to_a_public_company_-_section_41(2).pdf"}
+    ],
+    "related_sections": ["Section 41(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_clbg_application_minister_approval",
+    "form_number": "Form 10 & 15",
+    "name": "Application By CLBG For Minister’s Approval (Appendix A)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/bm/Pages/Legal_Framework/document/06_section_45_-_appendix_A.pdf"}
+    ],
+    "related_sections": ["Section 45", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_clbg_application_registrar_approval",
+    "form_number": "Form 10 & 15",
+    "name": "Lodgement Of Application By CLBG For Registrar’s Approval (Appendix B)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/bm/Pages/Legal_Framework/document/07_section_45_-_appendix_B.pdf"}
+    ],
+    "related_sections": ["Section 45", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_registered_address",
+    "form_number": "Form 44",
+    "name": "Notification For Change In The Registered Address",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/14._notification_for_a_change_in_the_registered_address_-_section_46.pdf"}
+    ],
+    "related_sections": ["Section 46", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_records_not_at_registered_address",
+    "form_number": "",
+    "name": "Notification Where Registers Or Records Are Not Kept At The Registered Address",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/15._notification_where_registers_are_not_kept_at_the_registered_address_-_section_472.pdf"}
+    ],
+    "related_sections": ["Section 47(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_records_address_change_notification",
+    "form_number": "",
+    "name": "Notification Of Change In The Address Where Registers Or Records Are Kept",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/15._notification_where_registers_are_not_kept_at_the_registered_address_-_section_472.pdf"}
+    ],
+    "related_sections": ["Section 47(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_branch_register_location_change",
+    "form_number": "Form 54",
+    "name": "Notification Where Branch Register Is Kept Or Change In The Address",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/19._notification_where_branch_register_is_kept_or_change_in_the_address_-_section_532.pdf"}
+    ],
+    "related_sections": ["Section 53(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_close_register_of_members",
+    "form_number": "Form 53A",
+    "name": "Notice To Close Register Of Members",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/20._notice_of_closure_of_rom_-_section_553.pdf"}
+    ],
+    "related_sections": ["Section 55(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_register_directors_managers_secretaries",
+    "form_number": "Form 49",
+    "name": "Notification Of Change In The Register Of Directors, Managers And Secretaries",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/notification%20of%20particulars%20changes%20of%20directors%20managers%20secretaries_151119.pdf"}
+    ],
+    "related_sections": ["Section 58", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_issuance_debentures",
+    "form_number": "",
+    "name": "Notification Of Issuance Of Debentures",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/22._notification_of_issuance_of_debenture_holders-_section_602.pdf"}
+    ],
+    "related_sections": ["Section 60(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_annual_return_share_capital",
+    "form_number": "Schedule 8",
+    "name": "Annual Return Of Company Having Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my/"}
+    ],
+    "related_sections": ["Section 68", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_annual_return_no_share_capital",
+    "form_number": "Form 55",
+    "name": "Annual Return Of Company Not Having Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my/"}
+    ],
+    "related_sections": ["Section 68", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_annual_return_unchanged",
+    "form_number": "",
+    "name": "Annual Return (Unchanged In Particulars)",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my/"}
+    ],
+    "related_sections": ["Section 68(6)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_redemption_preference_shares",
+    "form_number": "Form 27",
+    "name": "Notice Of Redemption Of Preference Shares",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/notice_of_redemption_of_preference_shares_-_section_72_130120.pdf"}
+    ],
+    "related_sections": ["Section 72", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_approval_allotment_shares",
+    "form_number": "",
+    "name": "Notice Of Approval For Allotment Of Shares Or Grant Of Rights",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/27._notice_of_approval_for_allotment_of_shares_or_grant_of_rights-_section_76.pdf"}
+    ],
+    "related_sections": ["Section 76", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_alteration_share_capital",
+    "form_number": "Form 11",
+    "name": "Notification Of Alteration Of Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/29._notification_of_alteration_of_share_capital-_section_84.pdf"}
+    ],
+    "related_sections": ["Section 84", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_court_order_variation_class_rights",
+    "form_number": "",
+    "name": "Lodgement Of Court Order To Confirm Or Disallow Variation Of Class Rights",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/30._lodgement_of_court_order_to_confirm_or_disallow_variation_of_class_rights_-_section_94.pdf"}
+    ],
+    "related_sections": ["Section 94", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_variation_class_rights",
+    "form_number": "Form 11",
+    "name": "Notification Of Variation Of Class Rights",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/notification_of_variation_of_class_rights_-_section_95_amended210218r1.pdf"}
+    ],
+    "related_sections": ["Section 95", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_solvency_statement_72",
+    "form_number": "",
+    "name": "Solvency Statement (To Be Lodged Prior To The Lodgement Of Notification Under S72(6)(B))",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/solvency_statement_under_s_113_151122.pdf"}
+    ],
+    "related_sections": ["Section 113", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_proposed_reduction_share_capital",
+    "form_number": "Form 11",
+    "name": "Notice Of Proposed Reduction Of Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/32._notice_of_proposed_reduction_of_share_capital-_section_117_090924.pdf"}
+    ],
+    "related_sections": ["Section 117", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_reduction_share_capital",
+    "form_number": "",
+    "name": "Notice Of Reduction Of Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Notice_of_to_effect_the_reduction_of_share_capital_s%20119(1)_080519.pdf"}
+    ],
+    "related_sections": ["Section 119(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_reduction_share_capital_objection",
+    "form_number": "",
+    "name": "Notice Of Reduction Of Share Capital Where Objection Was Dismissed Or Received",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/34._notice_to_effect_the_reduction_of_share_capital_where_objection_was_received_and_dismissed-_section_1192.pdf"}
+    ],
+    "related_sections": ["Section 119(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_share_buyback_declaration",
+    "form_number": "Form 28A",
+    "name": "Notice Of Shares Buy Back By A Company (To Make A Declaration Under S113(5))",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/35._notice_of_shares_buy_back_of_a_company_-_section_12716.pdf"}
+    ],
+    "related_sections": ["Section 127(16)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_treasury_shares",
+    "form_number": "Form 28B",
+    "name": "Notice Of Sale Or Cancellation Of Treasury Shares",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/notice_of_sale_or_cancellation_of_treasury_shares_s_127_2020.pdf"}
+    ],
+    "related_sections": ["Section 127", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_substantial_shareholder_interest",
+    "form_number": "Form 29A",
+    "name": "Notice Of Interest Of A Substantial Shareholder",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Notice%20of%20interest%20of%20substantial%20shareholder_ss%20137,%20138,%20138%20%26%20141_r2.pdf"}
+    ],
+    "related_sections": [
+      "Section 137",
+      "Section 138",
+      "Section 139",
+      "Section 141",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_register_prospectus",
+    "form_number": "",
+    "name": "Application For Registration Of Prospectus",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/37._application_for_registration_of_prospectus-s_154.pdf"}
+    ],
+    "related_sections": ["Section 154", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_relief_prospectus",
+    "form_number": "",
+    "name": "Application For Relief From Requirement As To Form And Contents Of Prospectus",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/38._application_for_relief_from_requirement_as_to_form_and_contents_of_prospectus-s_161.pdf"}
+    ],
+    "related_sections": ["Section 161", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_information_memorandum_prospectus",
+    "form_number": "",
+    "name": "Information Memorandum Deemed To Be Prospectus",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/39._information_memorandum_deemed_to_be_prospectus-s_1651.pdf"}
+    ],
+    "related_sections": ["Section 165(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_supplemental_prospectus",
+    "form_number": "",
+    "name": "Registration Of Supplemental Or Replacement Prospectus",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/40._registration_of_supplemental_or_replacement_prospectus-s_1661.pdf"}
+    ],
+    "related_sections": ["Section 166(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_successor_trustee",
+    "form_number": "",
+    "name": "Notice Of Appointment Of A Successor To A Trustee",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/41._notice_of_appointment_of_a_successor_to_a_trustee-s_1785.pdf"}
+    ],
+    "related_sections": ["Section 178(5)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statement_in_lieu_prospectus",
+    "form_number": "Schedule 6",
+    "name": "Lodgement Of Statement In Lieu Of Prospectus",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/42._lodgement_of_statement_in_lieu_of_prospectus-_section_1891.pdf"}
+    ],
+    "related_sections": ["Section 189(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statutory_declaration_commence_business",
+    "form_number": "Form 18",
+    "name": "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20190(3)(4),%2041(2)(c)_Statutory_declaration_on_entitlement_to_commence_business%20r2.pdf"}
+    ],
+    "related_sections": [
+      "Section 190(3)",
+      "Section 190(4)",
+      "Section 41(2)(c)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_directors_service_contract_location",
+    "form_number": "",
+    "name": "Notice Of Situation Where Contract Of Service Of Directors Are Kept",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/44._notice_of_situation_where_contract_of_service_of_directors_are_kept_-_section_2324.pdf"}
+    ],
+    "related_sections": ["Section 232(4)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_secretary_vacate_notice",
+    "form_number": "Form 48E",
+    "name": "Notice Of Intention To Vacate The Office Of Secretary",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/46_notice_of_intention_to_vacate_the_office_of_secretary-s2372.pdf"}
+    ],
+    "related_sections": ["Section 237(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_registration_secretary",
+    "form_number": "",
+    "name": "Registration To Act As Secretary",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://esecretary.ssm.com.my"}
+    ],
+    "related_sections": ["Section 241", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_accounting_period_approval",
+    "form_number": "",
+    "name": "Application For Approval For Different Accounting Periods For Companies In The Same Group",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/44._application_for_approval_for_different_accounting_periods_for_companies_in_the_same_group_s_2473_v2_140417_1.pdf"}
+    ],
+    "related_sections": ["Section 247(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_relief_financial_statements",
+    "form_number": "",
+    "name": "Application For Relief From The Form And Contents Of The Financial Statements And Directors’ Report",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/49._application_for_relief_from_the_form_and_contents_of_financial_statements_and_directors_reports_-_section_255.pdf"}
+    ],
+    "related_sections": ["Section 255", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_extension_time_financial_statements",
+    "form_number": "Form 51A",
+    "name": "Notice Of Extension Of Time To Lodge Financial Statements And Reports",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my/"}
+    ],
+    "related_sections": ["Section 259(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_exempt_private_company_certificate",
+    "form_number": "",
+    "name": "Lodgement Of Certificate Relating To Exempt Private Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/exempt_private_company_certificate_s.260_pdf.pdf"}
+    ],
+    "related_sections": ["Section 260", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_auditors_declaration",
+    "form_number": "",
+    "name": "Declaration By Firm Of Auditors",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/03_SECTION%20264(4A)%20-%20Declaration%20by%20Firm%20of%20Auditors.pdf"}
+    ],
+    "related_sections": ["Section 264(4A)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_registration_audit_firm",
+    "form_number": "Form 5",
+    "name": "Registration Of Firms Of Auditor",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/52._registration_of_firm_of_auditors-section_2651_edit.pdf"}
+    ],
+    "related_sections": ["Section 265(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_audit_firm_particulars",
+    "form_number": "Form 5",
+    "name": "Notification Of Changes In Particulars Of An Audit Firm",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/50._notification_of_change_in_the_register_of_firm_of_auditors-section_2654_edit%20(1).pdf"}
+    ],
+    "related_sections": ["Section 265(4)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_request_appoint_auditor",
+    "form_number": "",
+    "name": "Application To Request Registrar To Appoint Auditor",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/54._application_to_request_registrar_to_appoint_auditor-_section_268_272.pdf"}
+    ],
+    "related_sections": ["Section 268", "Section 272", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_special_notice_remove_auditor",
+    "form_number": "",
+    "name": "Notification Of Special Notice To Remove Auditor",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/notification_of_special_notice_to_remove_auditor_s_277.pdf"}
+    ],
+    "related_sections": ["Section 277", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_remove_auditor",
+    "form_number": "",
+    "name": "Notification To Remove Auditor From Office",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/53._notification_to_remove_auditor_from_office_s.2781%20(1).pdf"}
+    ],
+    "related_sections": ["Section 278", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_auditor_resignation",
+    "form_number": "",
+    "name": "Notice Of Resignation Of Auditor To The Registrar",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/notification_of_resignation_of_auditor_s282.pdf"}
+    ],
+    "related_sections": ["Section 282", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_auditor_cessation",
+    "form_number": "",
+    "name": "Cessation Of Office By Auditor",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/cessation_of_office_by_auditor_s%20284.pdf"}
+    ],
+    "related_sections": ["Section 284", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_extension_agm",
+    "form_number": "",
+    "name": "Extension Of Time For Holding Of Annual General Meeting",
+    "resource_type": "form",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my/"}
+    ],
+    "related_sections": ["Section 340(4)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_charge_particulars",
+    "form_number": "Form 34",
+    "name": "Statement Of Particulars To Be Lodged With Charge",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/56._statement_of_particulars_to_be_lodged_with_charge_section_352.pdf"}
+    ],
+    "related_sections": ["Section 352", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_series_debentures",
+    "form_number": "Form 35",
+    "name": "Statement Containing Particulars Of A Series Of Debentures",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/58._statement_containing_particulars_of_a_series_of_debentures-_section_355_1_2_3_0.pdf"}
+    ],
+    "related_sections": [
+      "Section 355(1)",
+      "Section 355(2)",
+      "Section 355(3)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_multiple_debenture_issue",
+    "form_number": "Form 36",
+    "name": "Particulars When More Than One Issue Is Made Of Debentures In A Series",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/59.particulars_when_more_than_one_issue_is_made_of_debentures_in_a_series_-_section_3552_3_0.pdf"}
+    ],
+    "related_sections": [
+      "Section 355(2)",
+      "Section 355(3)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_assignment_charge",
+    "form_number": "Form 40A",
+    "name": "Notice Of Assignment Of Charge",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/60.notice_of_assignment_of_charge-section_3591_0.pdf"}
+    ],
+    "related_sections": ["Section 359(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_variation_charge",
+    "form_number": "Form 40B",
+    "name": "Notice Of Variation In Terms Of Charge",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/61._notice_of_variation_in_terms_of_charge_-section_3592_0.pdf"}
+    ],
+    "related_sections": ["Section 359(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_release_charge_property",
+    "form_number": "Form 42",
+    "name": "Memorandum Where Property Or Undertaking Is Released From Registered Charge Or Has Ceased To Form Part Of Company’s Property Or Undertaking",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/62_memorandum_where_property_or_undertaking_is_released_from_registered_charge_s_3601.pdf"}
+    ],
+    "related_sections": ["Section 360(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_satisfaction_charge",
+    "form_number": "Form 41",
+    "name": "Memorandum Of Satisfaction Of Registered Charge",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/63.%20MEMORANDUM%20OF%20SATISFACTION%20OF%20REGISTERED%20CHARGE%20-Section%20360(1).pdf"}
+    ],
+    "related_sections": ["Section 360(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statutory_declaration_charge",
+    "form_number": "Form 43",
+    "name": "Statutory Declaration Verifying Memorandum",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20360(2)_Statutory%20Declaration%20Verifying%20Memorandum%20r2_190419.pdf"}
+    ],
+    "related_sections": ["Section 360(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_evidence_satisfaction_charge",
+    "form_number": "Form 42B",
+    "name": "Evidence Of Satisfaction Of Charge/Release Of Property Or Part Of Property From Charge",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/65_evidence_of_satisfaction_or_release_42b-3602.pdf"}
+    ],
+    "related_sections": ["Section 360(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_company_dissolved",
+    "form_number": "",
+    "name": "Company Dissolved Without Winding Up",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/66._company_be_dissolved_without_winding_up_-section_3702d%20(1).pdf"}
+    ],
+    "related_sections": ["Section 370(2)(d)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_receiver",
+    "form_number": "Form 59",
+    "name": "Notice Of Appointment Of Receiver",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/67._notice_of_appointment_of_receiver-section_377_0.pdf"}
+    ],
+    "related_sections": ["Section 377", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_receiver_cessation",
+    "form_number": "Form 60",
+    "name": "Notice Of Cessation Of Office By Receiver Or Manager",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/68.notice_of_cessation_of_office_by_receiver_or_manager-section_379_0.pdf"}
+    ],
+    "related_sections": ["Section 379", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_receiver_accounts",
+    "form_number": "Form 63",
+    "name": "Accounts Of Receipts And Payments By Receiver Or Receiver And Manager",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/69._account_of_receipts_and_payments_by_receiver_or_receiver_and_manager-section_3911_0.pdf"}
+    ],
+    "related_sections": ["Section 391(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_moratorium_commencement",
+    "form_number": "",
+    "name": "Notification Of Commencement Of The Moratorium For Voluntary Arrangement",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/70._notification_for_commencement_of_cva_section_396_rule_3.pdf"}
+    ],
+    "related_sections": ["Section 396", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_creditors_meeting_results",
+    "form_number": "",
+    "name": "Notification Of Results Of Creditors’ Meetings And Meeting Of Members",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/71.%20Notification%20of%20result%20of%20creditors%27%20and%20members%20meeting%20(section%20400(7)%20%20rule%204).pdf"}
+    ],
+    "related_sections": ["Section 400(7)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_replace_nominee",
+    "form_number": "",
+    "name": "Notification Of Replacement Of Nominee",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/72.%20Notification%20of%20replacement%20of%20nominee%20(Section%20401(2)%20%20rule%206).pdf"}
+    ],
+    "related_sections": ["Section 401(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_extension_judicial_management_application",
+    "form_number": "",
+    "name": "Notification Of Application For The Extension Of Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/74._notification_of_application_for_extension_of_jmo_section_4063_rule_37.pdf"}
+    ],
+    "related_sections": ["Section 406(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_advertisement_judicial_management",
+    "form_number": "",
+    "name": "Notification For Advertisement Of Notice Of The Application For Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/74._notification_for_advert_of_notice_of_application_for_jmo_section_4081_rule_11.pdf"}
+    ],
+    "related_sections": ["Section 408(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_application_judicial_management",
+    "form_number": "",
+    "name": "Notification Of Application For Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/75._notification_of_application_for_jmo_section_4082_rule_8%20(1).pdf"}
+    ],
+    "related_sections": ["Section 408(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_judicial_manager",
+    "form_number": "",
+    "name": "Notification Of Appointment Of New Interim Judicial Manager Or Judicial Manager",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/NOTIFICATION%20OF%20APPOINTMENT%20OF%20NEW%20Interim%20JM_JUDICIAL%20MANAGER_s%20413.pdf"}
+    ],
+    "related_sections": ["Section 413", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_discharge_judicial_manager",
+    "form_number": "",
+    "name": "Notification For The Discharge Of Judicial Manager",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/PDF.pdf"}
+    ],
+    "related_sections": ["Section 417", "Section 8 Subdivision 2 Division 8", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_judicial_management_order",
+    "form_number": "",
+    "name": "Notification Of Notice Of Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Notification_of_notice_of_jmo_section_4181a_rule_17%20(1).pdf"}
+    ],
+    "related_sections": ["Section 418(1)(a)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_extension_judicial_management",
+    "form_number": "",
+    "name": "Notification Of Extension Of Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/79._notification_of_extension_of_jmo_section_4181a_rule_37.pdf"}
+    ],
+    "related_sections": ["Section 418(1)(a)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statement_affairs_jm",
+    "form_number": "",
+    "name": "Notification Of Company'S Statements Of Affairs At The Date Of The Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/80._notification_of_companys_statement_of_affairs_section_4195%20(1).pdf"}
+    ],
+    "related_sections": ["Section 419(5)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statement_proposals",
+    "form_number": "",
+    "name": "Notification Of Statement Of Proposals",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/81._notification_of_statement_of_proposals_section_4201a%20(2021).pdf"}
+    ],
+    "related_sections": ["Section 420(1)(a)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_creditors_meeting_results_jm",
+    "form_number": "",
+    "name": "Notification Of Results Of The Creditors’ Meeting",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/81._notification_of_results_of_creditors_meeting_section_4214_4235_rule_34_0.pdf"}
+    ],
+    "related_sections": [
+      "Section 421(4)",
+      "Section 423(5)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_discharge_jm_order",
+    "form_number": "",
+    "name": "Notification For The Discharge Of Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/NOTIFICATION%20FOR%20THE%20DISCHARGE%20OF%20JUDICIAL%20MANAGEMENT%20ORDER%20fair%20(25012019).pdf"}
+    ],
+    "related_sections": [
+      "Section 421(7)",
+      "Section 424(3)",
+      "Section 425(5)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_approved_liquidator",
+    "form_number": "",
+    "name": "Notification Of Approval As An Approved Liquidator",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Section%20433(4D)%20and%20433(4E)%20Notification.pdf"}
+    ],
+    "related_sections": [
+      "Section 433(4D)",
+      "Section 433(4E)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_resolution_creditors_winding_up",
+    "form_number": "",
+    "name": "Notice Of Resolution (Creditors’ Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/84._notice_of_resolution_creditors_winding_up-_section_4392av2%20(1).pdf"}
+    ],
+    "related_sections": ["Section 439(2)(a)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_resolution_members_winding_up",
+    "form_number": "",
+    "name": "Notice Of Resolution (Members’ Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/71_notice_of_resolution_members_winding_up-_section_4392av2.pdf"}
+    ],
+    "related_sections": ["Section 439(2)(a)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_inability_continue_business",
+    "form_number": "",
+    "name": "Statutory Declaration Of Inability Of Company To Continue Business And That Meeting Of The Company And Its Creditors Have Been Summoned",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/72_statutory_declaration_of_inability_of_company_to_continue_business_and_that_meetings_of_the_company_-secv2.pdf"}
+    ],
+    "related_sections": ["Section 440(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_declaration_solvency",
+    "form_number": "Form 66",
+    "name": "Declaration Of Solvency",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/73_declaration_of_solvency-section_443v2.pdf"}
+    ],
+    "related_sections": ["Section 443", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_meeting_creditors",
+    "form_number": "Form 68",
+    "name": "Notice Of Holding Of Meeting Of Creditors",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/74_notice_of_holding_of_meeting_of_creditors-section_4474v2.pdf"}
+    ],
+    "related_sections": ["Section 447(4)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_liquidator_final_meeting",
+    "form_number": "Form 69",
+    "name": "Return By Liquidator Relating To Final Meeting",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/75_return_by_liquidator_relating_to_final_meeting-section_45934v2.pdf"}
+    ],
+    "related_sections": ["Section 459(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_defer_dissolution",
+    "form_number": "",
+    "name": "Differing The Date Of Dissolution (Voluntary Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/76._deferring_the_date_of_dissolution_voluntary_winding-up-section_4596.pdf"}
+    ],
+    "related_sections": ["Section 459(6)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_winding_up_order",
+    "form_number": "Form 65",
+    "name": "Notice Of The Winding Up Order And Particulars Of Liquidator",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/section_4741_-_notice_of_the_winding_up_order_and_particulars_of_liquidator.pdf"}
+    ],
+    "related_sections": ["Section 474(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_affidavit_statement_affairs",
+    "form_number": "Form 62",
+    "name": "Affidavit Verifying Statement Of Affairs",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/79._affidavit_verifying_statement_of_affairs-section_4841_3602_1.pdf"}
+    ],
+    "related_sections": ["Section 484", "Section 390(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statement_of_affairs",
+    "form_number": "Form 61",
+    "name": "Statement Of Affairs",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/79._affidavit_verifying_statement_of_affairs-section_4841_3602_1%20(1).pdf"}
+    ],
+    "related_sections": [
+      "Section 484",
+      "Section 388",
+      "Section 390",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_release_dissolution",
+    "form_number": "",
+    "name": "Orders Of Release Of Dissolution (Release)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/_statement_of_affairs-section_484_388_390_1_0.pdf"}
+    ],
+    "related_sections": ["Section 491", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_release_dissolution_general",
+    "form_number": "",
+    "name": "Orders Of Release Of Dissolution",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/95._orders_of_release_or_dissolution-section_491%20(1).pdf"}
+    ],
+    "related_sections": ["Section 491", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_stay_winding_up",
+    "form_number": "",
+    "name": "Stay Of Winding Up",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/83._stay_winding-up-section_492.pdf"}
+    ],
+    "related_sections": ["Section 492", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_termination_order",
+    "form_number": "",
+    "name": "Termination Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/84._termination_order-section_493.pdf"}
+    ],
+    "related_sections": ["Section 493", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_liquidator_court",
+    "form_number": "Form 70",
+    "name": "Notice Of Appointment And Address Of Liquidator (Court Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/85_notice_of_appointment_and_address_of_liquidator_court_winding_up-section_5131v2.pdf"}
+    ],
+    "related_sections": ["Section 513(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_liquidator_creditors",
+    "form_number": "Form 72",
+    "name": "Notice Of Appointment And Address Of Liquidator (Creditors’ Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/86_notice_of_appointment_and_address_of_liquidator_creditors_winding_up-section_5131v2.pdf"}
+    ],
+    "related_sections": ["Section 513(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_appointment_liquidator_voluntary",
+    "form_number": "Form 71",
+    "name": "Notice Of Appointment And Address Of Liquidator (Voluntary Winding Up)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/87_notice_of_appointment_and_address_of_liquidator_voluntary_winding_up-section_5131_mvw_v2.pdf"}
+    ],
+    "related_sections": ["Section 513(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_liquidator_change_address",
+    "form_number": "Form 73",
+    "name": "Notice Of Change Of Liquidator’s Address",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/88_notice_of_change_of_liquidators_address-section_5131v2.pdf"}
+    ],
+    "related_sections": ["Section 513(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_liquidator_resignation_removal",
+    "form_number": "Form 74",
+    "name": "Notice By Liquidator Of Resignation Or Removal From Office",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/89_notice_by_liquidator_of_resignation_or_removal_from_office-section_5133v2.pdf"}
+    ],
+    "related_sections": ["Section 513(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_liquidator_account_statements",
+    "form_number": "Form 75",
+    "name": "Liquidator’s Account Of Receipts And Payments And Statements",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/90_liquidators_account_of_receipts_and_payments_-_section_5141v2.pdf"}
+    ],
+    "related_sections": ["Section 514(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_void_dissolution",
+    "form_number": "",
+    "name": "Void Dissolution",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/91.void_dissolution-section_535.pdf"}
+    ],
+    "related_sections": ["Section 535", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_strike_off_application",
+    "form_number": "",
+    "name": "Application To Strike Off Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/application_to_strike_of_company_s550.pdf"}
+    ],
+    "related_sections": ["Section 550", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_object_striking_off",
+    "form_number": "",
+    "name": "Notice Of Intention To Object The Striking Off Of A Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/93._notice_of_intention_to_object_the_striking_off_of_a_company-_section_552.pdf"}
+    ],
+    "related_sections": ["Section 552", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_withdraw_striking_off",
+    "form_number": "",
+    "name": "Notice To Withdraw Striking Off Application",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/94._notice_to_withdraw_striking_off_application_-_section_553.pdf"}
+    ],
+    "related_sections": ["Section 553", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_registration_foreign_company",
+    "form_number": "Form 79 & 80",
+    "name": "Application For Registration Of Foreign Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20562(1)(fa)%20170524.pdf"}
+    ],
+    "related_sections": ["Section 562(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_foreign_agent",
+    "form_number": "Form 85 & 85A",
+    "name": "Change Of Particulars Of Foreign Company’s Agent",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/amend_s_56323_change_of_particulars_of_foreign_co_agent_r1.pdf"}
+    ],
+    "related_sections": ["Section 563(2)", "Section 563(3)", "Section 567(1)(c)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_registered_office",
+    "form_number": "Form 44",
+    "name": "Notice Of Situation Of Registered Office And Office Hours Of Foreign Company In Malaysia",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Form%20s%20566.pdf"}
+    ],
+    "related_sections": ["Section 566(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_company_particulars_change",
+    "form_number": "Form 44, 79, 81, 82, 84, 86",
+    "name": "Particulars Of Change Or Alteration Relating To Foreign Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20567%20fa.pdf"}
+    ],
+    "related_sections": [
+      "Section 567(1)(a)",
+      "Section 567(1)(b)",
+      "Section 567(1)(d)",
+      "Section 567(1)(e)",
+      "Section 567(1)(f)",
+      "Section 567(1)(fa)",
+      "Section 567(1)(g)",
+      "Companies Act 2016"
+    ]
+  },
+  {
+    "form_id": "ca_form_foreign_increase_authorised_capital",
+    "form_number": "",
+    "name": "Notice Of Increase In Authorised Share Capital/Share Capital By Foreign Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Notice_of_increase_of_share%20or%20authorised_capital_by_foreign_company-_section_567(3)%20(300921).pdf"}
+    ],
+    "related_sections": ["Section 567(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_financial_statement_verification",
+    "form_number": "Form 87",
+    "name": "Statutory Declaration Verifying Financial Statement Of Foreign Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/98.statutory_declaration_verifying_financial_statement_of_foreign_company-section_5751.pdf"}
+    ],
+    "related_sections": ["Section 575(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_waiver_application",
+    "form_number": "",
+    "name": "Application For Waiver By Foreign Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/99._application_for_waiver_by_foreign_company-_section_5757.pdf"}
+    ],
+    "related_sections": ["Section 575(7)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_annual_return_foreign_company",
+    "form_number": "Form 80A",
+    "name": "Annual Return Of Foreign Company",
+    "resource_type": "portal",
+    "links": [
+      {"type": "portal", "url": "https://ssm4u.com.my"}
+    ],
+    "related_sections": ["Section 576", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_cessation_business",
+    "form_number": "Form 90",
+    "name": "Notice By Foreign Company Of Cessation Of Business",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/101_notice_by_foreign_company_of_cessation_of_business-section_5781v2_0.pdf"}
+    ],
+    "related_sections": ["Section 578(1)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_foreign_agent_liquidator_dissolution",
+    "form_number": "Form 91",
+    "name": "Notice By Agent Of Foreign Company Of Liquidator Or Dissolution Of Company",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/102_notice_by_agent_of_foreign_company_of_liquidator_or_dissolution_of_company-section_5783.pdf"}
+    ],
+    "related_sections": ["Section 578(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_rectification_register",
+    "form_number": "",
+    "name": "Rectification Of Register",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Companies%20-Act%20-1965-(Repealed)/Form_Rectification%20of%20registers_s%20602.pdf"}
+    ],
+    "related_sections": ["Section 602", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_extension_lodgement_document",
+    "form_number": "",
+    "name": "Application For Extension Of Time For Lodging Document With Registrar",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/sec_609_eot_v3_110417.pdf"}
+    ],
+    "related_sections": ["Section 609", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_share_capital",
+    "form_number": "",
+    "name": "Notice Of Share Capital",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Notice_of_share_capital_section_618(8)(9)_amended_07031919.pdf"}
+    ],
+    "related_sections": ["Section 618(8)", "Section 618(9)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_nominee_withdrawal",
+    "form_number": "",
+    "name": "Notification Of Withdrawal Of Consent To Act As Nominee",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/NOTIFICATION%20OF%20WITHDRAWAL%20OF%20CONSENT%20TO%20ACT%20AS%20NOMINEE.pdf"}
+    ],
+    "related_sections": ["Para 5 Seventh Schedule", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_moratorium_commencement_advertisement",
+    "form_number": "",
+    "name": "Notification For Advertisement Of Commencement Of Moratorium For Voluntary Arrangement",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/NOTIFICATION%20FOR%20ADVERTISEMENT%20OF%20COMMENCEMENT%20OF%20MORATORIUM%20FOR%20VOLUNTARY%20ARRANGEMENT%20(Revised).pdf"}
+    ],
+    "related_sections": ["Para 10(a) Eight Schedule", "Para 10(c) Eight Schedule", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_moratorium_end_advertisement",
+    "form_number": "",
+    "name": "Notification For Advertisement Of The End Of Moratorium",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/NOTIFICATION%20FOR%20ADVERTISEMENT%20OF%20THE%20END%20OF%20MORATORIUM%20(Revised).pdf"}
+    ],
+    "related_sections": ["Para 12(a) Eight Schedule", "Para 12(b) Eight Schedule", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_court_orders_division8_part3",
+    "form_number": "",
+    "name": "Notification On Orders Of Court Pursuant To Application Under Division 8 Of Part III",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/general_form_subdivision_1division_8_part_iii_0.pdf"}
+    ],
+    "related_sections": ["Subdivision 1 Division 8 Part III", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_court_orders_division8_part3_update",
+    "form_number": "",
+    "name": "Notification On Orders Of Court Pursuant To Application Under Division 8 Of Part III",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/general_form_subdivision_2_division_8_part_iii%20(1)%20(2021).pdf"}
+    ],
+    "related_sections": ["Subdivision 2 Division 8 Part III", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_judicial_management_info_update",
+    "form_number": "",
+    "name": "Application Of Judicial Management Order (Information Update)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/APPLICATION%20OF%20JUDICIAL%20MANAGEMENT%20ORDER%20Info%20Update_SubDiv%202%20Div%208%20Pt%20III.pdf"}
+    ],
+    "related_sections": ["Subdivision 2 Division 8 Part III", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_business_address_nature",
+    "form_number": "",
+    "name": "Notification Of Change In The Business Address And/Or Nature Of Business",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/form_notification_of_change_in_the_business_address_nature_of_business_290917.pdf"}
+    ],
+    "related_sections": ["PD2/2017", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_instrument_transfer_shares",
+    "form_number": "Form 32A",
+    "name": "Instrument Of Transfer Of Shares",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/section_105-_form_of_transfer_of_securities_130317.pdf"}
+    ],
+    "related_sections": ["Section 105", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_solvency_statement_126_127",
+    "form_number": "",
+    "name": "Solvency Statement (To Be Made For The Purposes Of Section 126 & Section 127)",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/_solvency_statement_under_s_113_130317%20(1).pdf"}
+    ],
+    "related_sections": ["Section 113", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_interest_substantial_shareholder",
+    "form_number": "Form 29A",
+    "name": "Notice Of Interest Of Substantial Shareholder",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/section_137_-_notice_of_interest_of_substantial_shareholder.pdf"}
+    ],
+    "related_sections": ["Section 137", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_change_interest_substantial_shareholder",
+    "form_number": "Form 29B",
+    "name": "Change In Interest Of Substantial Shareholder",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/section_138_-_notice_of_change_in_interest_of_shareholder.pdf"}
+    ],
+    "related_sections": ["Section 138", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_person_ceasing_substantial_shareholder",
+    "form_number": "Form 29C",
+    "name": "Notice Of Person Ceasing To Be A Substantial Shareholder",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/section_139_-_notice_of_person_ceasing_to_be_a_subastantial_shareholder.pdf"}
+    ],
+    "related_sections": ["Section 139", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_notice_to_non_residents_substantial_shareholdings",
+    "form_number": "Form 29D",
+    "name": "Notice To Non-Residents As To Requirements Relating To The Disclosure Of Substantial Shareholdings",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/notice_to_non-residents_s_142_100317.pdf"}
+    ],
+    "related_sections": ["Section 142", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_declaration_person_before_director_appointment",
+    "form_number": "Form 48A",
+    "name": "Declaration By Person Before Appointment As Director",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/Sch%20C_s_201_declaration_by_person_before_appointment_as_director.pdf"}
+    ],
+    "related_sections": ["Section 201", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_declaration_person_before_secretary_appointment",
+    "form_number": "Form 48F",
+    "name": "Declaration By Person Before Appointment As Secretary",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/declaration_by_person_before_appointment_as_secretary_s_2363_amended09.pdf"}
+    ],
+    "related_sections": ["Section 236(3)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_terms_voluntary_arrangement_statements_affairs",
+    "form_number": "",
+    "name": "Terms Of Proposed Voluntary Arrangement And Company’s Statements Of Affairs",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/9.Terms%20of%20Proposed%20Voluntary%20Arrangement%20and%20Company%E2%80%99s%20Statement%20of%20Affairs%20(section%20397(1)).pdf"}
+    ],
+    "related_sections": ["Section 397(1)(b)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_statement_prospect_voluntary_arrangement",
+    "form_number": "",
+    "name": "Statement On Prospect Of Proposals For A Voluntary Arrangement",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/10.Statement%20on%20prospect%20of%20proposals%20for%20a%20voluntary%20arrangement%20(section%20397(2)).pdf"}
+    ],
+    "related_sections": ["Section 397(2)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_consent_act_nominee",
+    "form_number": "",
+    "name": "Consent To Act As Nominee",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/11.Statement%20of%20consent%20to%20act%20as%20nominee%20to%20director%20(section%20398(1)(d)).pdf"}
+    ],
+    "related_sections": ["Section 398(1)(d)", "Companies Act 2016"]
+  },
+  {
+    "form_id": "ca_form_company_statement_judicial_management",
+    "form_number": "",
+    "name": "Company’s Statement Of Affairs At The Date Of The Judicial Management Order",
+    "resource_type": "form",
+    "links": [
+      {"type": "pdf", "url": "https://www.ssm.com.my/Pages/Legal_Framework/Document/12.Company%27s%20statement%20of%20affairs%20at%20the%20date%20of%20JMO%20(Section%20418(2)).pdf"}
+    ],
+    "related_sections": ["Section 418(2)", "Companies Act 2016"]
   }
 ]
