@@ -1,0 +1,211 @@
+[
+  {
+    "query": "how to remove foreign company",
+    "query_hash": "1e5c0c47",
+    "response_snippet": "To remove a foreign company from the Malaysian registry, follow these steps:  \n\n1. **Notify the Registrar within 7 days**: If the foreign company ceases to have a place of business or carry on business in Malaysia, it must lodge a notice with the Registrar within **seven days** from the date of ceasing operations. This notice formally informs the Registrar of the company’s discontinuation of activ",
+    "auto_issues": [
+      {
+        "type": "missing_form",
+        "detail": "procedural query with no form shown",
+        "confidence": 0.7,
+        "agent": "form_mapping"
+      }
+    ],
+    "root_agent": "retrieval",
+    "reflection_note": "The response failed to retrieve the necessary section number for the foreign company removal process.",
+    "timestamp": "2026-04-01T11:58:03.565239",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "give me the form",
+    "query_hash": "de6c3f49",
+    "response_snippet": "To complete the procedure, you must submit the following forms **exactly as named**:\n\n1. **[Notification Of Appointment Of First Secretary](https://www.ssm.com.my/Pages/Legal_Framework/Document/Format%20S58%20236(2)%20Appointment%20First%20Cosec.pdf)**  \n   This form is required to formally appoint the first company secretary. The applicant must fill in all particulars and attach the required docu",
+    "auto_issues": [
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "retrieval",
+    "reflection_note": "The response failed to provide the full list of forms and their descriptions, leading to an incomplete and uncited answer.",
+    "timestamp": "2026-04-01T14:39:54.768384",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to change to private company",
+    "query_hash": "c96e9835",
+    "response_snippet": "To change your company to a private company, follow these steps under **Section 41(1) and (2), Companies Act 2016**:\n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (per **Section 14(1), Companies Act 2016**).  \n2. **Lodge the Notice of Conversion** with the Registrar using **[Form 11 & 18",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "form 11 & 18"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      },
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "unknown",
+    "reflection_note": "Reflection unavailable",
+    "timestamp": "2026-04-01T15:22:10.029513",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to change to private company",
+    "query_hash": "c96e9835",
+    "response_snippet": "To change your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by the company’s members.  \n2. **Prepare the Notice of Conversion** (Form 11 & 18) and specify an appropriate alteration to the company’s name, as required under **Section 41(1) of the Companies Act 2016**.  \n3.",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "form 18"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      },
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "unknown",
+    "reflection_note": "Reflection unavailable",
+    "timestamp": "2026-04-01T15:51:20.731255",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to change to private company",
+    "query_hash": "c96e9835",
+    "response_snippet": "To change your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: The company must resolve to convert from a public company to a private company. This requires approval by at least 75% of the members (Section 41(1), Companies Act 2016).  \n\n2. **Lodge a Notice of Conversion**: Submit **[Notice Of Conversion From A Private Company To A Public Company](https://www.",
+    "auto_issues": [
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "retrieval",
+    "reflection_note": "The response contains incomplete information and lacks the necessary sections for a complete answer.",
+    "timestamp": "2026-04-01T16:09:27.430676",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: The company must resolve to convert from a public company to a private company. This requires approval by at least 75% of the members (**Section 41(1), Companies Act 2016**).  \n\n2. **Lodge a Notice of Conversion**: Submit **[Notice Of Conversion From A Private Company To A Public Company](https:/",
+    "auto_issues": [
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "unknown",
+    "reflection_note": "Reflection unavailable",
+    "timestamp": "2026-04-01T16:15:41.590277",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private companh",
+    "query_hash": "6c299e6f",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (per **Section 41(1), Companies Act 2016**).  \n\n2. **Prepare the required documents**:  \n   - **Notice of Conversion from a Public Company to a Private Company** ([Form 11 & ",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "form 11 & 18"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      },
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "form_mapping",
+    "reflection_note": "Auto-diagnosed: form_hallucination",
+    "timestamp": "2026-04-02T07:50:57.744585",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (**Section 41(1), Companies Act 2016**).  \n\n2. **Prepare the required documents**:  \n   - **Notice of Conversion from a Public Company to a Private Company** ([Form 11 & 18](",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "form 11 & 18"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      },
+      {
+        "type": "uncited_answer",
+        "detail": "substantive answer contains no source citations",
+        "confidence": 0.65,
+        "agent": "generation"
+      }
+    ],
+    "root_agent": "form_mapping",
+    "reflection_note": "Auto-diagnosed: form_hallucination",
+    "timestamp": "2026-04-02T07:57:55.843938",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Your company must first pass a special resolution (approved by at least 75% of shareholders) to convert from a public company to a private company. This resolution must specify the alteration to the company’s name, if applicable. **(Section 41(1), Companies Act 2016)**  \n\n2. **Prepare the Notice ",
+    "auto_issues": [],
+    "root_agent": "retrieval",
+    "reflection_note": "The response failed to provide a complete and accurate guide on converting a company to a private company, missing key steps and necessary legal documents.",
+    "timestamp": "2026-04-02T09:04:17.198325",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Hold a general meeting and obtain approval from shareholders via a special resolution. This resolution must explicitly state the intent to convert to a private company. **(Section 41(1), Companies Act 2016)**  \n\n2. **Prepare Required Documents**:  \n   - **[Statutory Declaration On Entitlement To ",
+    "auto_issues": [],
+    "root_agent": "unknown",
+    "reflection_note": "Reflection unavailable",
+    "timestamp": "2026-04-02T09:19:26.844049",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Hold a general meeting and obtain approval from shareholders via a special resolution. This resolution must explicitly state the intent to convert to a private company. **(Section 41(1), Companies Act 2016)**  \n\n2. **Prepare Required Documents**:  \n   - **[Statutory Declaration On Entitlement To ",
+    "auto_issues": [],
+    "root_agent": "unknown",
+    "reflection_note": "Reflection unavailable",
+    "timestamp": "2026-04-02T09:36:13.718649",
+    "rating": 1,
+    "correction_applied": false
+  }
+]

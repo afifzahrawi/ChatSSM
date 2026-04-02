@@ -1,0 +1,12 @@
+{
+  "convert_public_to_private": {
+    "intent_action": "convert_public_to_private",
+    "form_id": "",
+    "form_name": "[flagged: convert_public_to_private]",
+    "confidence": 0.5,
+    "locked": false,
+    "confirmed_positive": 0,
+    "confirmed_negative": 0,
+    "timestamp": "2026-04-02T09:36:13.738345"
+  }
+}

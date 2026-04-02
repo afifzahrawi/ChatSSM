@@ -6,12 +6,25 @@ import json
 import logging
 import re
 import time
+import os
+import hashlib
+import learning_agent
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+from functools import lru_cache
 import requests
 
 logger = logging.getLogger("chatssm.intent_agent")
 
+_FORM_OVERRIDES_FILE      = os.path.join("qa_data", "form_overrides.json")
+# Written by CorrectionEngine after thumbs-down; bypasses LLM on re-runs
+_QUERY_INTENT_FILE        = os.path.join("qa_data", "query_intent_corrections.json")
+# Written by CorrectionEngine; injected into classifier system prompt
+_CLASSIFIER_PATCHES_FILE  = os.path.join("qa_data", "learned_patches.json")
+
+_INTENT_CACHE: Dict[str, "FormResolutionResult"] = {}
+_INTENT_CACHE_MAX = 200
+_NEGATIVELY_RATED: set = set() 
 
 # ─── Structured output schema ─────────────────────────────────────────────────
 
@@ -47,6 +60,7 @@ class FormResolutionResult:
 INTENT_TAXONOMY = {
     # Company lifecycle
     "incorporate_company":          ["14"],
+    "register_company":             ["14"],
     "convert_private_to_public":    ["41(2)", "190(3)"],
     "convert_public_to_private":    ["41(1)"],
     "convert_unlimited_to_limited": ["40"],
@@ -59,7 +73,7 @@ INTENT_TAXONOMY = {
 
     # Director & officer changes
     "appoint_director":             ["58", "201"],
-    "remove_director":              ["206", "58"],
+    "remove_director":              ["206"],
     "director_resignation":         ["208", "58"],
     "appoint_secretary":            ["58", "236(2)"],
     "secretary_resignation":        ["237(2)", "58"],
@@ -77,7 +91,7 @@ INTENT_TAXONOMY = {
     "lodge_annual_return":          ["68"],
     "lodge_financial_statements":   ["259"],
     "hold_agm":                     ["340"],
-    "extend_agm_deadline":          ["340(4)"],
+    "extend_agm_deadline":          ["340(4), 340"],
     "audit_exemption":              ["267A"],
 
     # Beneficial ownership
@@ -131,14 +145,22 @@ OUTPUT FORMAT (return ONLY this JSON, no other text, no markdown):
 {{
   "action": "<action_code_from_taxonomy_or_unknown>",
   "legal_procedure": "<short English description of what they want to do>",
-  "likely_sections": ["<section_number>", ...],
+  "likely_sections": ["41(1)", "190(3)"],
   "confidence": <0.0 to 1.0>,
   "reasoning": "<one sentence: why you chose this action>",
   "is_actionable": <true|false>,
   "ambiguous": <false|true>
 }}
 
-RULES:
+CRITICAL JSON RULES — VIOLATIONS CAUSE SYSTEM FAILURE:
+1. "likely_sections" MUST be an array of QUOTED STRINGS: ["41(1)", "58"]
+   NEVER write unquoted values like [41(1)] — that is invalid JSON.
+2. All string values MUST use double quotes, never single quotes.
+3. Return ONLY the JSON object. No preamble, no explanation, no markdown.
+4. The response MUST end with the closing brace }}.
+5. "reasoning" must be ONE short sentence. Do NOT write paragraphs.
+
+CLASSIFICATION RULES:
 1. If the user is asking for information/explanation only → is_actionable: false
 2. If the user wants to DO something → is_actionable: true
 3. If multiple actions are equally possible → ambiguous: true, pick most likely
@@ -146,6 +168,11 @@ RULES:
 5. NEVER invent action codes outside the taxonomy
 6. NEVER include form names or URLs in your output
 7. Respond in the same language classification but always return JSON in English keys
+
+TAXONOMY DIRECTION NOTE:
+  convert_public_to_private  = a PUBLIC company becoming PRIVATE (s.41(1))
+  convert_private_to_public  = a PRIVATE company becoming PUBLIC (s.41(2))
+  These are OPPOSITE directions. Read the user query carefully before classifying.
 """
 
 
@@ -183,12 +210,68 @@ class IntentFormAgent:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def _load_form_overrides(self) -> Dict[str, Dict]:
+        """Read corrections written by LearningAgent.CorrectionEngine."""
+        if not os.path.exists(_FORM_OVERRIDES_FILE):
+            return {}
+        try:
+            with open(_FORM_OVERRIDES_FILE, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _load_query_intent_corrections() -> Dict[str, str]:
+        """
+        Returns {query_hash: correct_intent_action}.
+        Written by CorrectionEngine when thumbs-down + self-reflection produces
+        a suggested_intent.  Allows resolve() to hard-route the query to the
+        correct intent without calling the LLM classifier at all.
+        """
+        if not os.path.exists(_QUERY_INTENT_FILE):
+            return {}
+        try:
+            with open(_QUERY_INTENT_FILE, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _load_classifier_patches() -> str:
+        """
+        Reads learned_patches.json and assembles a compact correction block
+        to prepend to the classifier system prompt.
+        Only includes intent-direction-correction entries so the classifier
+        is not polluted with generation-level patches.
+        """
+        if not os.path.exists(_CLASSIFIER_PATCHES_FILE):
+            return ""
+        try:
+            with open(_CLASSIFIER_PATCHES_FILE, "r", encoding="utf-8") as fh:
+                patches = json.load(fh)
+        except Exception:
+            return ""
+
+        lines = []
+        for entry in patches.values():
+            if isinstance(entry, dict) and entry.get("type") == "intent_direction_correction":
+                lines.append(entry.get("patch_text", ""))
+
+        if not lines:
+            return ""
+        return (
+            "\nCORRECTIONS FROM USER FEEDBACK (apply these first):\n"
+            + "\n".join(f"  • {ln}" for ln in lines)
+            + "\n"
+        )
+
     def resolve(
         self,
         query: str,
         retrieved_sections: Dict[tuple, int],
         conversation_history: List[Dict],
         lang: str = "en",
+        detected_act: Optional[str] = None,
     ) -> FormResolutionResult:
         """
         Main entry point. Returns FormResolutionResult.
@@ -201,24 +284,84 @@ class IntentFormAgent:
         """
 
         # Cache hit (same query in same session)
-        cache_key = f"{query[:100]}_{lang}"
-        if cache_key in self._cache:
+        cache_key = hashlib.md5(f"{query[:100]}_{lang}".encode()).hexdigest()
+        if cache_key in _INTENT_CACHE and cache_key not in _NEGATIVELY_RATED:
             logger.debug("IntentFormAgent: cache hit for query.")
-            return self._cache[cache_key]
+            return _INTENT_CACHE[cache_key]
 
-        # Step 1: Run agent classification
+        # ── Step 0: Check stored query-hash → correct-intent corrections ──────
+        # Written by CorrectionEngine after thumbs-down + self-reflection.
+        # Bypasses the LLM entirely for queries that have been previously
+        # misclassified and corrected — no risk of re-making the same mistake.
+        query_hash = hashlib.md5(
+            re.sub(r"\s+", " ", query.lower().strip()).rstrip("?.! ").encode()
+        ).hexdigest()[:8]
+        intent_corrections = self._load_query_intent_corrections()
+        if query_hash in intent_corrections and cache_key in _NEGATIVELY_RATED:
+            correct_action = intent_corrections[query_hash]
+            logger.info(
+                "IntentFormAgent: using stored intent correction for hash=%s → '%s'",
+                query_hash, correct_action,
+            )
+            # Synthesize a LegalIntent using the stored correct action
+            intent = LegalIntent(
+                action          = correct_action,
+                legal_procedure = correct_action.replace("_", " ").title(),
+                likely_sections = INTENT_TAXONOMY.get(correct_action, []),
+                confidence      = 1.0,
+                reasoning       = "Stored correction from user feedback",
+                language        = lang,
+                is_actionable   = True,
+                ambiguous       = False,
+            )
+            result = self._resolve_from_intent(intent, detected_act=detected_act)
+            if result.forms:
+                if len(_INTENT_CACHE) >= _INTENT_CACHE_MAX:
+                    _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)))
+                _INTENT_CACHE[cache_key] = result
+                _NEGATIVELY_RATED.discard(cache_key)   # correction applied — reset
+                return result
+
+        # Step 1: Run agent classification (with any learned patches injected)
         intent = self._classify_intent(query, conversation_history, lang)
+
+        if intent and intent.action != "unknown":
+            overrides = self._load_form_overrides()
+            override  = overrides.get(intent.action)
+            if override and override.get("locked") and override.get("form_id"):
+            # Find the form in the index by form_id
+                locked_form = next(
+                    (f for f in self._forms if f.get("form_id") == override["form_id"]),
+                    None,
+                )
+                if locked_form:
+                    logger.info(
+                        "IntentFormAgent: using locked override for action '%s' → '%s'",
+                        intent.action, override.get("form_name", ""),
+                    )
+                    result = FormResolutionResult(
+                        forms=[self._to_output_dict(locked_form)],
+                        intent=intent,
+                        resolution_path="locked_override",
+                        confidence=1.0,
+                    )
+                    if len(_INTENT_CACHE) >= _INTENT_CACHE_MAX:
+                        _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)))
+                    _INTENT_CACHE[cache_key] = result
+                    return result
 
         # Step 2: Route based on intent result
         if intent and intent.is_actionable and intent.confidence >= self._MIN_CONFIDENCE and not intent.ambiguous:
-            result = self._resolve_from_intent(intent)
+            result = self._resolve_from_intent(intent, detected_act=detected_act)
             if result.forms:
                 logger.info(
                     "IntentFormAgent: resolved via agent intent '%s' "
                     "(confidence=%.2f) → %d form(s)",
                     intent.action, intent.confidence, len(result.forms)
                 )
-                self._cache[cache_key] = result
+                if len(_INTENT_CACHE) >= _INTENT_CACHE_MAX:
+                    _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)))
+                _INTENT_CACHE[cache_key] = result
                 return result
 
         # Step 3: Fall back to section matching
@@ -229,7 +372,9 @@ class IntentFormAgent:
                     "IntentFormAgent: resolved via section matching → %d form(s)",
                     len(result.forms)
                 )
-                self._cache[cache_key] = result
+                if len(_INTENT_CACHE) >= _INTENT_CACHE_MAX:
+                    _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)))
+                _INTENT_CACHE[cache_key] = result
                 return result
 
         # Step 4: Non-actionable or no match
@@ -238,8 +383,33 @@ class IntentFormAgent:
             forms=[], intent=intent,
             resolution_path="none", confidence=0.0
         )
-        self._cache[cache_key] = result
+
+        if len(_INTENT_CACHE) >= _INTENT_CACHE_MAX:
+            _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)))  # evict oldest
+        _INTENT_CACHE[cache_key] = result
+
+        logger.info(
+            "IntentFormAgent.resolve: action='%s' confidence=%.2f path='%s' forms=%d",
+            intent.action if intent else "none",
+            intent.confidence if intent else 0.0,
+            result.resolution_path,
+            len(result.forms),
+        )
+
         return result
+    
+    def invalidate(self, query: str, lang: str = "en") -> None:
+        """Called by LearningAgent when a query receives thumbs down."""
+        cache_key = hashlib.md5(f"{query[:100]}_{lang}".encode()).hexdigest()
+        _NEGATIVELY_RATED.add(cache_key)
+        _INTENT_CACHE.pop(cache_key, None)
+        logger.info("IntentFormAgent: invalidated cache for negatively rated query.")
+
+    def clear_negative_rating(self, query: str, lang: str = "en") -> None:
+        """Called on thumbs-up to re-enable caching for this query."""
+        cache_key = hashlib.md5(f"{query[:100]}_{lang}".encode()).hexdigest()
+        _NEGATIVELY_RATED.discard(cache_key)
+        logger.info("IntentFormAgent: cleared negative rating flag for query.")
 
     # ── Agent classification ───────────────────────────────────────────────────
 
@@ -266,9 +436,14 @@ class IntentFormAgent:
             f"Current user query: {query}"
         )
 
-        system = _AGENT_SYSTEM_PROMPT.format(
-            taxonomy=self._taxonomy_str
-        )
+        # Inject any learned classifier patches (intent-direction corrections
+        # written by CorrectionEngine after previous thumbs-down events).
+        classifier_patches = self._load_classifier_patches()
+        system = _AGENT_SYSTEM_PROMPT.format(taxonomy=self._taxonomy_str)
+        if classifier_patches:
+            # Prepend corrections so the model sees them at max attention weight
+            system = classifier_patches + "\n" + system
+            logger.debug("IntentFormAgent: injected %d classifier patch(es).", classifier_patches.count("•"))
 
         try:
             resp = requests.post(
@@ -283,8 +458,9 @@ class IntentFormAgent:
                     "think":  False,
                     "options": {
                         "temperature": 0.0,
-                        "num_predict": 300,
+                        "num_predict": 180,
                         "num_ctx":     2048,
+                        "stop": ["\n}\n", "}\n"],
                     },
                 },
                 timeout=(5, self._TIMEOUT),
@@ -317,10 +493,42 @@ class IntentFormAgent:
     def _parse_intent(self, raw_json: str, lang: str) -> Optional[LegalIntent]:
         """Parse and validate the agent's JSON output."""
         try:
-            data = json.loads(raw_json)
+            # ── Repair Pass 1: fix unquoted section numbers like [41(1), 58] ────
+            # Matches array values that look like section numbers but are unquoted
+            repaired = re.sub(
+                r'\[([^\]"]*?)\]',   # find array content
+                lambda m: '[' + ', '.join(
+                    f'"{item.strip()}"' if item.strip() and not item.strip().startswith('"')
+                    else item.strip()
+                    for item in m.group(1).split(',')
+                    if item.strip()
+                ) + ']',
+                raw_json,
+            )
+
+            # ── Repair Pass 2: close truncated JSON ──────────────────────────────
+            # If the JSON is missing its closing brace, add it
+            stripped = repaired.strip()
+            if stripped.startswith('{') and not stripped.endswith('}'):
+                # Find the last complete key-value pair by looking for the last comma
+                # or the last complete quoted string
+                last_complete = max(
+                    stripped.rfind('",\n'),
+                    stripped.rfind('",'),
+                    stripped.rfind('",\r\n'),
+                )
+                if last_complete != -1:
+                    # Truncate at the last complete pair and close the object
+                    repaired = stripped[:last_complete + 1] + '\n}'
+                else:
+                    repaired = stripped + '\n}'
+                logger.warning(
+                    "IntentFormAgent: repaired truncated JSON (added closing brace)."
+                )
+
+            data = json.loads(repaired)
 
             action = data.get("action", "unknown")
-            # Validate against taxonomy
             if action != "unknown" and action not in INTENT_TAXONOMY:
                 logger.warning(
                     "IntentFormAgent: agent returned unknown action '%s' — treating as unknown",
@@ -350,7 +558,7 @@ class IntentFormAgent:
 
     # ── Form resolution from intent ────────────────────────────────────────────
 
-    def _resolve_from_intent(self, intent: LegalIntent) -> FormResolutionResult:
+    def _resolve_from_intent(self, intent: LegalIntent, detected_act: Optional[str] = None,) -> FormResolutionResult:
         """
         Maps a classified intent action to forms.
         Uses the taxonomy's section list to match forms.json entries.
@@ -371,7 +579,7 @@ class IntentFormAgent:
             )
 
         # Also include sections the agent itself identified
-        all_sections = set(expected_sections) | set(intent.likely_sections)
+        all_sections = set(expected_sections)
 
         matched_forms = []
         for form_entry in self._forms:
@@ -384,6 +592,14 @@ class IntentFormAgent:
             )
             if score > 0:
                 matched_forms.append((score, form_entry))
+
+        if detected_act and matched_forms:
+            act_filtered = [
+                (score, f) for score, f in matched_forms
+                if not f.get("_act_filter") or detected_act in f.get("_act_filter", [])
+            ]
+            if act_filtered:
+                matched_forms = act_filtered
 
         matched_forms.sort(key=lambda x: x[0], reverse=True)
 
@@ -418,19 +634,46 @@ class IntentFormAgent:
             )
 
         total = sum(section_freq.values())
+        max_freq = max(section_freq.values())
         scored = []
 
         for form_entry in self._forms:
             form_sections = form_entry.get("_parsed_sections", [])
             score = 0.0
+            form_best_freq = 0
+
             for ref, freq in section_freq.items():
                 ref_str = ref[0] + (f"({ref[1]})" if ref[1] else "")
                 for fs in form_sections:
                     if self._sections_match(ref_str, fs):
                         # Weight by relative frequency
                         score += freq / total
-            if score > 0.15:  # minimum relative weight threshold
-                scored.append((score, form_entry))
+                        form_best_freq = max(form_best_freq, freq)
+
+            if score == 0:
+                continue
+
+            # ── Dominance gate ────────────────────────────────────────────────────
+            # A form is only returned when its linked section is actually dominant
+            # in the retrieved context — not just incidentally mentioned once.
+            #
+            # Gate 1: raw score must exceed 0.30 (was 0.15)
+            #   → requires the section to represent ≥30% of all section mentions
+            # Gate 2: the section must appear in at least 60% as many chunks as
+            #   the most-cited section in the results
+            #   → blocks forms tied to incidental sections (Section 58 appearing
+            #     once while Section 46 appears 4 times is now blocked)
+            if score < 0.30:
+                continue
+            if form_best_freq < max_freq * 0.60:
+                logger.debug(
+                    "_resolve_from_sections: skipping '%s' — "
+                    "section freq %d < 60%% of dominant %d",
+                    form_entry.get("name", "")[:40], form_best_freq, max_freq,
+                )
+                continue
+
+            scored.append((score, form_entry))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top_forms = [self._to_output_dict(f) for _, f in scored[:3]]
@@ -467,10 +710,19 @@ class IntentFormAgent:
         Parses related_sections into normalized tuples for fast matching.
         """
         indexed = []
+        _ACT_MAP = {
+            "companies act": "Companies Act 2016",
+            "act 777":       "Companies Act 2016",
+            "llp act":       "LLP Act 2012",
+            "act 743":       "LLP Act 2012",
+            "rob act":       "Registration of Businesses Act 1956",
+            "act 197":       "Registration of Businesses Act 1956",
+        }
         _SEC_EXTRACT_RE = re.compile(
             r'(?:section|seksyen|s\.?)\s*(\d+[a-z]?)(?:\((\w+)\))?',
             re.IGNORECASE
         )
+
         for form in forms_data:
             parsed_sections = []
             for rs in form.get("related_sections", []):
@@ -482,8 +734,20 @@ class IntentFormAgent:
                     parsed_sections.append(
                         parent + (f"({child})" if child else "")
                     )
+
+            act_filter = []
+            for rs in form.get("related_sections", []):
+                rs_lower = rs.lower()
+                for keyword, act in _ACT_MAP.items():
+                    if keyword in rs_lower and act not in act_filter:
+                        act_filter.append(act)
+            # Default: if no act found, assume Companies Act (most common)
+            if not act_filter:
+                act_filter = ["Companies Act 2016"]
+            
             form_copy = dict(form)
             form_copy["_parsed_sections"] = parsed_sections
+            form_copy["_act_filter"] = act_filter
             indexed.append(form_copy)
         return indexed
 
@@ -496,13 +760,14 @@ class IntentFormAgent:
     @staticmethod
     def _to_output_dict(form: Dict) -> Dict:
         links = form.get("links", [])
-        primary = next(
-            (l["url"] for l in links if l.get("type") in ("pdf", "portal", "platform")),
-            ""
+        primary_link = next(
+            (l for l in links if l.get("type") in ("pdf", "portal", "platform")),
+            {}
         )
         return {
             "name":        form["name"],
             "form_number": form.get("form_number", ""),
-            "url":         primary,
+            "url":           primary_link.get("url", ""),
+            "link_type":     primary_link.get("type", "pdf"),
             "resource_type": form.get("resource_type", "form"),
         }

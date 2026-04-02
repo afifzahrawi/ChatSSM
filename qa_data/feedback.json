@@ -220,5 +220,360 @@
     "rating": 5,
     "failure_type": "",
     "comment": ""
+  },
+  {
+    "qa_id": "bd4316cde379",
+    "timestamp": "2026-04-01T11:57:56.834984",
+    "query": "how to remove foreign company",
+    "response_snippet": "To remove a foreign company from the Malaysian registry, follow these steps:  \n\n1. **Notify the Registrar within 7 days**: If the foreign company ceases to have a place of business or carry on business in Malaysia, it must lodge a notice with the Registrar within **seven days** from the date of ceas",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Guidelines For Striking Off Section 549(a)",
+      "FAQ - RETURN OF ALLOTMENT OF SHARES (ROA) AND REGISTER OF MEMBERS (ROM)",
+      "FAQs ON THE COMPANIES (AMENDMENT) ACT 2024 [ACT A1701]",
+      "Guidelines Relating to the Obligations of Company Secretary as a Reporting Institution Under the Anti-Money Laundering, Anti-Terrorism Financing and Proceeds of Unlawful Activities Act 2001 (AMLA)",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [],
+    "form_correct": false
+  },
+  {
+    "qa_id": "ee9da809f7b1",
+    "timestamp": "2026-04-01T14:39:47.896306",
+    "query": "give me the form",
+    "response_snippet": "To complete the procedure, you must submit the following forms **exactly as named**:\n\n1. **[Notification Of Appointment Of First Secretary](https://www.ssm.com.my/Pages/Legal_Framework/Document/Format%20S58%20236(2)%20Appointment%20First%20Cosec.pdf)**  \n   This form is required to formally appoint ",
+    "citations": [
+      "FAQ - INCORPORATION",
+      "FAQ - ANNUAL RETURN",
+      "FAQ - REGISTRATION OF SECRETARY",
+      "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
+      "FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING",
+      "FAQ - RETURN OF ALLOTMENT OF SHARES (ROA) AND REGISTER OF MEMBERS (ROM)",
+      "Guidelines for the Adjudication of Proof of Debts under Section 369B of the Companies Act 2016 and other related matters"
+    ],
+    "rating": 1,
+    "failure_type": "",
+    "comment": "",
+    "form_ids": [
+      "Notification Of Appointment Of First Secretary",
+      "Notification Of Change In The Register Of Directors, Managers And Secretaries"
+    ],
+    "form_correct": false
+  },
+  {
+    "qa_id": "c32e4214773f",
+    "timestamp": "2026-04-01T15:00:18.407975",
+    "query": "how to change to limited company",
+    "response_snippet": "To change your company to a limited company, follow these steps under **Section 40(1), Companies Act 2016**:\n\n1. **Pass a special resolution** to convert from an unlimited company to a limited company. This resolution must specify the alteration to the company’s name (if applicable) and the terms of",
+    "citations": [
+      "Companies Regulations 2017",
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Companies Act 2016: Practice Note No. 6/2024: Notification of Approval as an Approved Liquidator",
+      "Companies (Licence For Omission Of 'Berhad' Or 'Bhd.') Regulations 2025",
+      "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)"
+    ],
+    "rating": 1,
+    "failure_type": "other",
+    "comment": "",
+    "form_ids": [
+      "Application For Change Of Name"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "6a551940e890",
+    "timestamp": "2026-04-01T15:22:02.609949",
+    "query": "how to change to private company",
+    "response_snippet": "To change your company to a private company, follow these steps under **Section 41(1) and (2), Companies Act 2016**:\n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (per **Section 14(1), Com",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies Act 2016 : Practice Note No. 4/2018: Procedures on Resignation of Secretary under Section 237 of the Companies Act 2016",
+      "FAQ - MEETINGS AND DECISION MAKING",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "863c385902a4",
+    "timestamp": "2026-04-01T15:39:06.520363",
+    "query": "how to change to public company",
+    "response_snippet": "To change your company to a public company, follow these steps under **Section 41(2), Companies Act 2016**:\n\n1. **Pass a special resolution** to convert the company to a public company. This resolution must be approved by the shareholders.  \n2. **Prepare the required forms**:  \n   - **[Notice Of Con",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - INCORPORATION",
+      "Companies (Amendment) Act 2024 {Act A1701}",
+      "FAQ - CONSTITUTION (MEMORANDUM & ARTICLES OF ASSOCIATION)",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Checklist for CLBG (1-8)",
+      "FAQ - MEETINGS AND DECISION MAKING",
+      "Companies (Amendment) Regulations 2024"
+    ],
+    "rating": 5,
+    "failure_type": "",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": true
+  },
+  {
+    "qa_id": "68061e071c38",
+    "timestamp": "2026-04-01T15:42:14.286278",
+    "query": "how to change to private company",
+    "response_snippet": "To change your company to a private company, follow these steps under **Section 41(1) and (2), Companies Act 2016**:\n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (as per the company’s art",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies Act 2016 : Practice Note No. 4/2018: Procedures on Resignation of Secretary under Section 237 of the Companies Act 2016",
+      "FAQ - MEETINGS AND DECISION MAKING",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false
+  },
+  {
+    "qa_id": "b8d1aef08385",
+    "timestamp": "2026-04-01T15:51:13.643191",
+    "query": "how to change to private company",
+    "response_snippet": "To change your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by the company’s members.  \n2. **Prepare the Notice of Conversion** (Form 11 & 18) and specify an appropriate a",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies Act 2016 : Practice Note No. 4/2018: Procedures on Resignation of Secretary under Section 237 of the Companies Act 2016",
+      "FAQ - MEETINGS AND DECISION MAKING",
+      "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "4c758980dda4",
+    "timestamp": "2026-04-01T16:09:20.632352",
+    "query": "how to change to private company",
+    "response_snippet": "To change your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: The company must resolve to convert from a public company to a private company. This requires approval by at least 75% of the members (Section 41(1), Companies Act 2016).  \n\n2. **Lodge a Notice of C",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "Companies (Practising Certificate For Secretaries) Regulations 2019",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies Act 2016 : Practice Note No. 4/2018: Procedures on Resignation of Secretary under Section 237 of the Companies Act 2016",
+      "FAQ - MEETINGS AND DECISION MAKING",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "hallucination",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "2ddae713b1f1",
+    "timestamp": "2026-04-01T16:15:34.627777",
+    "query": "how to convert to private company",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: The company must resolve to convert from a public company to a private company. This requires approval by at least 75% of the members (**Section 41(1), Companies Act 2016**).  \n\n2. **Lodge a Notice",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "hallucination",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "7b47b2946393",
+    "timestamp": "2026-04-02T07:50:57.701763",
+    "query": "how to convert to private companh",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (per **Section 41(1), Companies Act 2016**).  \n\n2. **Prepare the required ",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Companies (Access to the Register and Information Relating to Beneficial Ownership) Regulations 2025",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Licence For Omission Of 'Berhad' Or 'Bhd.') Regulations 2025",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "d3e5da89b9fc",
+    "timestamp": "2026-04-02T07:57:55.726970",
+    "query": "how to convert to private company",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a special resolution** to convert from a public company to a private company. This resolution must be approved by at least 75% of the shareholders (**Section 41(1), Companies Act 2016**).  \n\n2. **Prepare the required docu",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "4c313eeac4cf",
+    "timestamp": "2026-04-02T09:04:06.319008",
+    "query": "how to convert to private company",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Your company must first pass a special resolution (approved by at least 75% of shareholders) to convert from a public company to a private company. This resolution must specify the alteration to th",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_source",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "4d509231c79a",
+    "timestamp": "2026-04-02T09:19:16.455313",
+    "query": "how to convert to private company",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Hold a general meeting and obtain approval from shareholders via a special resolution. This resolution must explicitly state the intent to convert to a private company. **(Section 41(1), Companies ",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "other",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "20787c20f884",
+    "timestamp": "2026-04-02T09:36:06.764116",
+    "query": "how to convert to private company",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Hold a general meeting and obtain approval from shareholders via a special resolution. This resolution must explicitly state the intent to convert to a private company. **(Section 41(1), Companies ",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "Companies Regulations 2017",
+      "FAQ - SHARES AND SOLVENCY STATEMENT",
+      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
+      "Guidelines on Asset Management (section 556 and 558) (Revised)",
+      "Guidelines For Striking Off Section 549(a)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 8/2024: Clarification on Whether a Society Can Be A Member of a Company",
+      "Companies (Amendment) Act 2024 {Act A1701}"
+    ],
+    "rating": 1,
+    "failure_type": "other",
+    "comment": "",
+    "form_ids": [
+      "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
+      "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
   }
 ]

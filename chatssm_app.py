@@ -45,7 +45,6 @@ from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
 from filelock import FileLock
 from rank_bm25 import BM25Okapi # type: ignore
-from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -58,6 +57,7 @@ import csv
 from chunk import Chunk, SearchResult
 from memory_manager import MemoryManager
 from intent_form_agent import IntentFormAgent
+from learning_agent import LearningAgent
 
 # =============================================================================
 # LOGGING
@@ -150,7 +150,6 @@ AppConfig.ensure_dirs()
 _QA_LOG_FILE       = os.path.join(AppConfig.DATA_DIR, "qa_log.csv")
 _FEEDBACK_FILE     = os.path.join(AppConfig.DATA_DIR, "feedback.json")
 _EMBEDDING_CACHE   = os.path.join(AppConfig.CACHE_DIR, "embedding_cache.pkl")
-_RESPONSE_CACHE_FILE = os.path.join(AppConfig.DATA_DIR, "response_cache.pkl")
 
 # =============================================================================
 # DATA CLASSES
@@ -238,6 +237,9 @@ _QUERY_SYNONYMS: Dict[str, str] = {
     r'\bcosec\b': 'company secretary',
     r'\begt\b':  'extraordinary general meeting',
     r'\begm\b':  'extraordinary general meeting',
+    r'\bchange\s+(?:my\s+)?company\s+address\b': 'change registered address companies act section 46',
+    r'\bchange\s+(?:my\s+)?(?:registered\s+)?address\b': 'notification change registered address section 46',
+    r'\bregistered\s+office\s+address\b':         'registered address section 46 companies act',
 }
 
 _GREETING_RE = re.compile(
@@ -477,386 +479,6 @@ class FormEntry:
         if self.links:
             return self.links[0].get("url", "")
         return ""
-
-# FormRegistry and its sentinel are retained for legacy compatibility but
-# form detection is now handled entirely by IntentFormAgent.  The registry
-# is no longer called from main().
-_ASK_USER_SENTINEL = object()   # kept so old pickled session_state doesn't crash
-
-class FormRegistry:
-    """
-    Loads SSM forms from forms.json and supports two retrieval modes:
-      1. Explicit — form number/keyword detected in query
-      2. Semantic  — embedding similarity against form purpose
-    """
-
-    # Explicit form request patterns
-    _EXPLICIT_RE = re.compile(
-        r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?|[A-Za-z][0-9]*)\b'
-        r'|\b(?:give|get|show|download|need|nak|minta|dapatkan)\s+(?:me\s+)?'
-        r'(?:the\s+)?(?:form|borang)\b',
-        re.IGNORECASE,
-    )
-    # Implicit intent patterns — procedural questions that usually require a form
-    _IMPLICIT_RE = re.compile(
-        r'\b(?:how\s+(?:to|do\s+I)|cara|nak|steps?\s+to|procedure\s+for|'
-        r'process\s+(?:to|for)|langkah|apply\s+for|daftar|register|submit|'
-        r'lodge|file|kemukakan|permohonan)\b',
-        re.IGNORECASE,
-    )
-
-    _ACTION_RE = re.compile(
-        r'\b(?:'
-        r'how\s+(?:to|do\s+I|can\s+I)\b'
-        r'|where\s+(?:to|do\s+I|can\s+I|should\s+I)\b'        
-        r'|cara\b'
-        r'|nak\s+(?:daftar|hantar|kemukakan|tukar|ubah|mohon|laksana)\b'
-        r'|steps?\s+to\b|procedure\s+(?:to|for)\b'
-        r'|(?:apply|applying)\s+for\b'
-        r'|register\s+(?:a|my|our|as|with|for)\b'              
-        r'|registering\s+(?:a|my|our|as|with|for)\b'
-        r'|(?:submit|lodge|file|convert|change)\s+(?:a|the|my|an)\b'
-        r'|langkah[-\s]langkah\b|tatacara\b'
-        r'|(?:tukar|daftar|kemukakan|mohon|hantar)\s+\w+'
-        r'|di\s+mana\s+(?:nak|untuk|boleh)\b'                  
-        r')',
-        re.IGNORECASE,
-    )
-    _INFORMATIONAL_RE = re.compile(
-        r'\b(?:what\s+(?:is|are|happens?|if|does|did|do)|'
-        r'what\'s\b|'
-        r'tell\s+me\s+(?:about|what|how)\b|'
-        r'explain\s+(?:section|the|what|how|why)\b|'
-        r'describe\b|'
-        r'penalty|penalti|denda|offence|kesalahan|'
-        r'requirement|keperluan|syarat|'
-        r'difference|perbezaan|beza|'
-        r'explain|terangkan|jelaskan|'
-        r'why|mengapa|sebab)\b',
-        re.IGNORECASE,
-    )
-
-    _FORM_REQUEST_RE = re.compile(
-        r'\b(?:'
-        r'give\s+me\s+(?:the\s+)?(?:form|borang)'
-        r'|show\s+(?:me\s+)?(?:the\s+)?(?:form|borang)'
-        r'|what\s+form\s+(?:do\s+I|should\s+I|is\s+needed)'
-        r'|(?:provide|send|get)\s+(?:me\s+)?(?:the\s+)?(?:form|borang)'
-        r'|(?:minta|dapatkan|tunjuk)\s+(?:borang|form)'
-        r'|borang\s+(?:apa|mana|yang)'
-        r')',
-        re.IGNORECASE,
-    )
-
-    MAX_FORMS_EXPLICIT = 3   # hard cap for explicit form number requests
-    MAX_FORMS_IMPLICIT = 4   # hard cap for context-derived matching; dynamic logic may return fewer
-    SEMANTIC_THRESHOLD = 0.60
-
-    def __init__(self, emb: "EmbeddingService") -> None:
-        self._emb   = emb
-        self._forms: List[FormEntry] = []
-        self._load()
-
-    def _load(self) -> None:
-        path = AppConfig.FORMS_FILE
-        if not os.path.exists(path):
-            logger.warning("forms.json not found at %s — form suggestions disabled.", path)
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            for d in data:
-                # Backward-compat: if old record has "url" but no "links",
-                # promote it to a single-item links list with type "pdf"
-                if "url" in d and "links" not in d:
-                    d["links"] = [{"type": "pdf", "url": d.pop("url")}]
-                elif "url" in d:
-                    d.pop("url")   # drop redundant old field if links already present
-                self._forms.append(FormEntry(**{
-                    k: v for k, v in d.items()
-                    if k in FormEntry.__dataclass_fields__
-                }))
-            logger.info("FormRegistry: loaded %d form(s).", len(self._forms))
-        except Exception as exc:
-            logger.error("FormRegistry: failed to load forms.json: %s", exc)
-
-    def detect(
-        self,
-        query: str,
-        search_query: str = "",
-        result_chunks: Optional[List[str]] = None,
-        last_sections: Optional[Dict[tuple, int]] = None,
-    ) -> list:
-        """
-        Strict section-first form retrieval.
-
-        Returns only forms whose linked sections are the DOMINANT sections
-        in the retrieved context.  Never guesses or falls back to generic forms.
-
-        Two bugs fixed vs previous version:
-          1. _SEC_RE had a \\b that prevented subsection capture — '41(1)' was
-             parsed as '41' with no child, making subsection discrimination impossible.
-          2. All retrieved sections were weighted equally, so incidental sections
-             (e.g. Section 14 mentioned once in a 12-chunk answer about Section 40)
-             competed on equal footing with the dominant section.
-
-        Scoring now weights each section match by the number of chunks it appears
-        in.  A section mentioned in 3 of 12 chunks outscores one mentioned once.
-        """
-
-        if not self._forms:
-            return []
-
-        # ── Corrected section extraction regex ────────────────────────────────
-        # The original pattern r'\bsection\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?\b'
-        # had \\b BETWEEN groups which matched before '(' in '41(1)' — causing
-        # the subsection to never be captured.  Fixed by replacing terminal \\b
-        # with a lookahead that works after optional ')'.
-        _SEC_RE = re.compile(
-            r'\b(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?'
-            r'(?=\b|\s|\.|,|;|\)|\(|$)',
-            re.IGNORECASE,
-        )
-
-        # ── Gate 0: Explicit section reference in user query ──────────────────
-        # Only enter this path if the query is NOT purely informational.
-        # A query like "what is section 40" mentions a section but does not
-        # require a form — the user wants to understand the law, not file anything.
-        # Allow through if: (a) no informational signal, OR (b) action intent present.
-        _is_informational_only = (
-            self._INFORMATIONAL_RE.search(query) is not None
-            and self._ACTION_RE.search(query) is None
-        )
-        if not _is_informational_only:
-            query_section_refs: set = set()
-            for m in _SEC_RE.finditer(query):
-                query_section_refs.add((m.group(1).lower(), m.group(2).lower() if m.group(2) else None))
-
-            if query_section_refs:
-                scored = []
-                for form in self._forms:
-                    sec_entries = [
-                        rs for rs in form.related_sections
-                        if not rs.lower().startswith("companies act")
-                        and not rs.lower().startswith("llp act")
-                    ]
-                    score = sum(self._score_ref(rs, query_section_refs) for rs in sec_entries)
-                    if score >= 2 or (score == 1 and len(sec_entries) == 1):
-                        scored.append((score, form))
-                if scored:
-                    scored.sort(key=lambda x: x[0], reverse=True)
-                    return self._pdf_only([f for _, f in scored[:self.MAX_FORMS_EXPLICIT]])
-                # No form matches the explicitly cited section — return nothing
-                return []
-
-        # ── Gate 1: Explicit form number request ──────────────────────────────
-        if self._EXPLICIT_RE.search(query):
-            num_match = re.search(
-                r'\b(?:form|borang)\s*(?:no\.?\s*)?([0-9]+[A-Za-z]?)',
-                query, re.IGNORECASE,
-            )
-            if num_match:
-                target = num_match.group(1).strip().lower()
-                exact = [
-                    f for f in self._forms
-                    if f.form_number and target in f.form_number.lower()
-                ]
-                if exact:
-                    return self._pdf_only(exact[:self.MAX_FORMS_EXPLICIT])
-                
-        # ── Gate 1.5: Follow-up form request — reuse previous section context ─────
-        if self._FORM_REQUEST_RE.search(query) and last_sections:
-            # User is explicitly asking for a form from the previous procedure.
-            # Skip all action/informational gates and go straight to scoring
-            # using the sections we already know are relevant.
-            _prev_refs = set(last_sections.keys())
-            _prev_max  = max(last_sections.values())
-
-            def _prev_weighted(rs_string: str) -> float:
-                m = re.match(
-                    r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
-                    rs_string.strip(), re.IGNORECASE,
-                )
-                if not m:
-                    return 0.0
-                f_parent = m.group(1).lower()
-                f_child  = m.group(2).lower() if m.group(2) else None
-                for r_parent, r_child in _prev_refs:
-                    if r_parent != f_parent:
-                        continue
-                    freq = last_sections[(r_parent, r_child)]
-                    if f_child is not None and r_child is not None:
-                        if f_child == r_child:
-                            return 2.0 * freq
-                        continue
-                    return 1.0 * freq
-                return 0.0
-
-            prev_scored = []
-            for form in self._forms:
-                sec_entries = [
-                    rs for rs in form.related_sections
-                    if not rs.lower().startswith("companies act")
-                    and not rs.lower().startswith("llp act")
-                ]
-                total = sum(_prev_weighted(rs) for rs in sec_entries)
-                if total > 0:
-                    prev_scored.append((total, form))
-
-            if prev_scored:
-                prev_scored.sort(key=lambda x: x[0], reverse=True)
-                return self._pdf_only([f for _, f in prev_scored[:self.MAX_FORMS_EXPLICIT]])
-            # Previous context found but no form matches — return nothing
-            return []
-
-        # ── Gate 2a: Action intent required ───────────────────────────────────
-        check_text = query + " " + search_query
-        if not self._ACTION_RE.search(check_text):
-            return []
-
-        # ── Gate 2b: Block pure informational queries ─────────────────────────
-        if self._INFORMATIONAL_RE.search(query):
-            return []
-
-        # ── Gate 3: Frequency-weighted section matching ────────────────────────
-        # Build a frequency map: how many individual chunks mention each section.
-        # Sections appearing in more chunks are more central to the answer.
-        if not result_chunks:
-            return []
-
-        section_freq: Dict[tuple, int] = {}
-        for chunk in result_chunks:
-            chunk_refs: set = set()
-            for m in _SEC_RE.finditer(chunk):
-                chunk_refs.add((m.group(1).lower(), m.group(2).lower() if m.group(2) else None))
-            for ref in chunk_refs:
-                section_freq[ref] = section_freq.get(ref, 0) + 1
-
-        if not section_freq:
-            # Procedural intent detected but no section refs in chunks — return nothing
-            return []
-
-        all_refs = set(section_freq.keys())
-        # Dominant frequency: how many chunks does the most-cited section appear in
-        max_freq = max(section_freq.values())
-        distinct_parents = len({r[0] for r in all_refs})
-        MIN_FORM_FREQ = 2 
-
-        def _weighted_score(rs_string: str) -> float:
-            m = re.match(
-                r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
-                rs_string.strip(), re.IGNORECASE,
-            )
-            if not m:
-                return 0.0
-            f_parent = m.group(1).lower()
-            f_child  = m.group(2).lower() if m.group(2) else None
-
-            best = 0.0
-            for r_parent, r_child in all_refs:
-                if r_parent != f_parent:
-                    continue
-                freq = section_freq[(r_parent, r_child)]
-                if f_child is not None and r_child is not None:
-                    if f_child == r_child:
-                        base = 2.0                    # exact subsection match
-                    else:
-                        continue                      # different subsection — skip
-                else:
-                    base = 1.0                        # parent-level match
-                best = max(best, base * freq)
-            return best
-
-        scored = []
-        for form in self._forms:
-            sec_entries = [
-                rs for rs in form.related_sections
-                if not rs.lower().startswith("companies act")
-                and not rs.lower().startswith("llp act")
-            ]
-            if not sec_entries:
-                continue
-
-            total = sum(_weighted_score(rs) for rs in sec_entries)
-            if total == 0:
-                continue
-
-            # Require that this form's section is sufficiently dominant.
-            # "Dominant" = the section appears in at least HALF as many chunks
-            # as the most-cited section.  This blocks forms linked to incidental
-            # sections (mentioned once) when the answer is primarily about a
-            # different section (mentioned multiple times).
-            form_max_freq = 0.0
-            for rs in sec_entries:
-                m2 = re.match(
-                    r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
-                    rs.strip(), re.IGNORECASE,
-                )
-                if not m2:
-                    continue
-                fp, fc = m2.group(1).lower(), (m2.group(2).lower() if m2.group(2) else None)
-                for ref in all_refs:
-                    if ref[0] == fp:
-                        form_max_freq = max(form_max_freq, section_freq[ref])
-
-            # Gate: form's section must appear in ≥ 50% of max_freq chunks
-            if distinct_parents > 1 and (
-                form_max_freq < max_freq * 0.6    # raised from 0.5 to 0.6
-                or form_max_freq < MIN_FORM_FREQ  # must appear in ≥2 chunks regardless
-            ):
-                logger.debug(
-                    "FormRegistry: skipping '%s' — section freq %.0f < 60%% of max %.0f or < min %d",
-                    form.name[:40], form_max_freq, max_freq, MIN_FORM_FREQ,
-                )
-                continue
-
-            scored.append((total, form))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        # Dynamic form limit:
-        #   • Single dominant section → max 2 (one procedure, avoid overload)
-        #   • Multiple dominant sections → up to 4 (complex workflow may need several)
-        #   • Hard cap at MAX_FORMS_IMPLICIT to prevent overwhelming the user
-        n_dominant = sum(1 for ref in all_refs if section_freq[ref] >= max_freq * 0.5)
-        dynamic_limit = min(max(2, n_dominant * 2), self.MAX_FORMS_IMPLICIT)
-        return self._pdf_only([f for _, f in scored[:dynamic_limit]])
-
-    @staticmethod
-    def _score_ref(rs_string: str, ref_pool: set) -> int:
-        """Score one form section string against a pool of (parent, child) refs."""
-        m = re.match(
-            r'(?:section|seksyen)\s+(\d+[a-z]?)(?:\((\d+[a-z]?)\))?',
-            rs_string.strip(), re.IGNORECASE,
-        )
-        if not m:
-            return 0
-        f_parent = m.group(1).lower()
-        f_child  = m.group(2).lower() if m.group(2) else None
-        for r_parent, r_child in ref_pool:
-            if r_parent != f_parent:
-                continue
-            if f_child is not None and r_child is not None:
-                return 2 if f_child == r_child else 0
-            return 1
-        return 0
-
-    @staticmethod
-    def _pdf_only(forms: List["FormEntry"]) -> List["FormEntry"]:
-        """Keep forms that have at least one usable link (pdf or portal)."""
-        _VALID = {"pdf", "portal", "platform"}
-        return [
-            f for f in forms
-            if any(l.get("type") in _VALID for l in f.links)
-        ]
-
-    def reload(self) -> None:
-        self._forms.clear()
-        self._load()
-
-
-@st.cache_resource
-def _form_registry() -> FormRegistry:
-    return FormRegistry(_emb())
 
 # =============================================================================
 # EMBEDDING SERVICE  (RAM cache → disk cache → Ollama API)
@@ -1461,46 +1083,83 @@ class KnowledgeBase:
     def _word_match(self, kw: str, text: str) -> bool:
         return bool(re.search(r'\b' + re.escape(kw) + r'\b', text))
 
+    # FIXED _detect_query_act():
     def _detect_query_act(self, query: str) -> Optional[str]:
-        """
-        Detect which Act the user is asking about from their query.
-        Requires at least 2 matched keywords to reduce false positives.
-
-        BUG FIX: Removed overly generic keywords like "business" and "shares"
-        that caused false Act attribution on broad queries.
-        """
         query_lower = query.lower()
 
-        act_keywords = {
+        # ── Tier 1: Strong single-keyword signals ─────────────────────────────
+        # These phrases are unambiguous — one match is sufficient to attribute an Act.
+        # Each phrase is specific enough that a false positive is essentially impossible.
+        strong_signals = {
             "Companies Act 2016": [
-                "company", "companies", "director", "shareholder",
-                "incorporation", "memorandum", "articles of association",
-                "board meeting", "annual general meeting", "agm",
-                "companies act", "act 777", "company secretary",
-                "winding up", "deregistration",
+                "companies act", "act 777",
+                "registered address",  
+                "registered office",
+                "annual return",
+                "company secretary",
+                "articles of association",
+                "memorandum of association",
+                "winding up",
+                "deregistration",
+                "annual general meeting",
+                "board of directors",
+                "share capital",
+                "allotment of shares",
+                "beneficial ownership",
+                "my company", 
+                "our company",
+                "the company", 
             ],
             "LLP Act 2012": [
-                "llp", "limited liability partnership",
-                "llp partner", "llp act", "act 743",
-                "limited liability",
+                "llp act", "act 743",
+                "limited liability partnership",
+                "llp partner",
             ],
             "Registration of Businesses Act 1956": [
-                "sole proprietor", "sole proprietorship",
-                "registration of business", "act 197",
-                "business registration", "rob act",
+                "registration of businesses act",
+                "rob act", "act 197",
+                "sole proprietorship",
+            ],
+        }
+
+        for act, phrases in strong_signals.items():
+            for phrase in phrases:
+                if self._word_match(phrase, query_lower):
+                    logger.info(
+                        "Detected Act from strong signal '%s': %s", phrase, act
+                    )
+                    return act
+
+        # ── Tier 2: Weaker keywords — require 2 matches ───────────────────────
+        # These words are common enough to appear in cross-act contexts, so we
+        # require at least 2 to confirm attribution.
+        weak_keywords = {
+            "Companies Act 2016": [
+                "company", "companies", "director", "shareholder",
+                "incorporation", "agm", "secretary",
+                "dividend", "constitution",
+            ],
+            "LLP Act 2012": [
+                "llp", "limited liability", "partnership",
+            ],
+            "Registration of Businesses Act 1956": [
+                "sole proprietor", "business registration",
+                "registration of business",
             ],
         }
 
         best_act: Optional[str] = None
         best_count = 0
-        for act, keywords in act_keywords.items():
+        for act, keywords in weak_keywords.items():
             matches = sum(1 for kw in keywords if self._word_match(kw, query_lower))
             if matches >= 2 and matches > best_count:
                 best_act   = act
                 best_count = matches
 
         if best_act:
-            logger.info("Detected Act from query: %s (%d keyword matches)", best_act, best_count)
+            logger.info(
+                "Detected Act from weak keywords: %s (%d matches)", best_act, best_count
+            )
         return best_act
 
     # ── Search ────────────────────────────────────────────────────────────────
@@ -1719,6 +1378,40 @@ class FeedbackStore:
             logger.warning("FeedbackStore load failed: %s", exc)
             return []
 
+    def update_failure_type(self, qa_id: str, failure_type: str) -> None:
+        """
+        Write back the auto-diagnosed failure_type to an existing record.
+        Called by LearningAgent after async diagnosis completes.
+        Only updates if the record currently has no failure_type set,
+        so manual user labels (if any exist) are never overwritten.
+        """
+        with FileLock(self._lock_path):
+            records = self._load_raw()
+            updated = False
+            for record in records:
+                if record.get("qa_id") == qa_id and not record.get("failure_type"):
+                    record["failure_type"]    = failure_type
+                    record["auto_diagnosed"]  = True   # flag: set by system, not user
+                    updated = True
+                    break
+            if not updated:
+                return
+            tmp_path = self._path + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    json.dump(records, fh, indent=2, ensure_ascii=False)
+                shutil.move(tmp_path, self._path)
+                logger.info(
+                    "FeedbackStore: wrote auto-diagnosed failure_type='%s' for qa_id=%s",
+                    failure_type, qa_id[:12],
+                )
+            except Exception as exc:
+                logger.error("FeedbackStore.update_failure_type failed: %s", exc)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     def summary(self) -> Dict:
         """Aggregate stats for the analytics panel."""
         records   = self.load()
@@ -1741,128 +1434,6 @@ class FeedbackStore:
             "failure_counts": failure_counts,
             "records":        records,
         }
-
-# =============================================================================
-# RESPONSE CACHE
-# =============================================================================
-
-class ResponseCache:
-    """
-    Cross-session LRU response cache. Shared across all Streamlit sessions
-    via @st.cache_resource. Thread-safe via a single RLock.
-
-    Key: md5(normalize(query) + sorted(selected_keys) + str(cat_filter))
-    Value: {response, citations, categories_hit, timestamp}
-
-    Cache is keyed on the NORMALIZED query + active source selection so
-    that users with different source filters get correct separate entries.
-    """
-    MAX_ENTRIES: int   = 500
-    TTL_SECONDS: float = 86400.0   # 24 hours — legal corpus changes infrequently
-
-    def __init__(self) -> None:
-        self._cache: OrderedDict = OrderedDict()
-        self._lock  = threading.RLock()
-        self._load()
-
-    @staticmethod
-    def _make_key(query: str, selected_keys: List[str],
-                cat_filter: Optional[List[str]],
-                lang: str = "en") -> str:
-        q = re.sub(r"\s+", " ", query.lower().strip()).rstrip("?.! ")
-        sources_str = ",".join(sorted(selected_keys))
-        cats_str    = ",".join(sorted(cat_filter)) if cat_filter else "all"
-        raw = f"{q}||{sources_str}||{cats_str}||{lang}"
-        return hashlib.md5(raw.encode()).hexdigest()
-
-    def get(self, query: str, selected_keys: List[str],
-            cat_filter: Optional[List[str]], lang: str = "en") -> Optional[Dict]:
-        key = self._make_key(query, selected_keys, cat_filter, lang)
-        with self._lock:
-            if key not in self._cache:
-                return None
-            entry = self._cache[key]
-            if time.time() - entry["timestamp"] > self.TTL_SECONDS:
-                del self._cache[key]
-                return None
-            # LRU: move to end
-            self._cache.move_to_end(key)
-            return entry
-
-    def put(self, query: str, selected_keys: List[str],
-            cat_filter: Optional[List[str]], response: str,
-            citations: List[str], categories_hit: List[str],
-            lang: str = "en") -> None:
-        key = self._make_key(query, selected_keys, cat_filter, lang)
-        with self._lock:
-            self._cache[key] = {
-                "response":       response,
-                "citations":      citations,
-                "categories_hit": categories_hit,
-                "timestamp":      time.time(),
-            }
-            self._cache.move_to_end(key)
-            while len(self._cache) > self.MAX_ENTRIES:
-                self._cache.popitem(last=False)  # evict oldest
-        self._save()
-
-    def invalidate(self) -> None:
-        """Call after a source is re-indexed to clear stale entries."""
-        with self._lock:
-            self._cache.clear()
-        if os.path.exists(_RESPONSE_CACHE_FILE):
-            os.remove(_RESPONSE_CACHE_FILE)
-
-    def invalidate_entry(self, cache_key: str) -> None:
-        """Remove one specific entry. Called when user rates a response 👎."""
-        with self._lock:
-            if cache_key in self._cache:
-                del self._cache[cache_key]
-                logger.info("ResponseCache: evicted entry %s due to negative feedback.", cache_key[:12])
-        self._save()
-
-    def _save(self) -> None:
-        fd, tmp = None, None
-        try:
-            with self._lock:
-                data = dict(self._cache)
-            fd, tmp = tempfile.mkstemp(
-                dir=os.path.dirname(_RESPONSE_CACHE_FILE), suffix=".tmp"
-            )
-            with os.fdopen(fd, "wb") as fh:
-                fd = None
-                pickle.dump(data, fh)
-            shutil.move(tmp, _RESPONSE_CACHE_FILE)
-            tmp = None
-        except Exception as exc:
-            logger.warning("ResponseCache save failed: %s", exc)
-            if fd is not None:
-                try: os.close(fd)
-                except OSError: pass
-            if tmp and os.path.exists(tmp):
-                try: os.unlink(tmp)
-                except OSError: pass
-
-    def _load(self) -> None:
-        if not os.path.exists(_RESPONSE_CACHE_FILE):
-            return
-        try:
-            with open(_RESPONSE_CACHE_FILE, "rb") as fh:
-                data = pickle.load(fh)
-            now = time.time()
-            with self._lock:
-                for k, v in data.items():
-                    if now - v.get("timestamp", 0) < self.TTL_SECONDS:
-                        cached_response = v.get("response", "")
-                        if not _OOS_PATTERN.search(cached_response):
-                            self._cache[k] = v
-        except Exception as exc:
-            logger.warning("ResponseCache load failed: %s", exc)
-
-
-@st.cache_resource
-def _response_cache() -> ResponseCache:
-    return ResponseCache()
 
 # =============================================================================
 # PROMPT OPTIMIZER
@@ -1922,6 +1493,15 @@ class PromptOptimizer:
   • Apply a stricter standard: if you cannot find EXACT textual support, say it is not found.
   • Partial matches and indirect implications do not count as explicit support.
   • It is always better to use the out-of-scope response than to speculate.""",
+
+  # Add to _PATCHES dict (after "out_of_scope"):
+        "wrong_form": """\
+⚠️ FORM ACCURACY — SYSTEM REINFORCEMENT (wrong form reported):
+  • The FORM INSTRUCTION block lists EXACT form names from the official SSM registry.
+  • You MUST copy the form name VERBATIM — do NOT paraphrase, shorten, or rename it.
+  • If a form name is given as "Notification Of Change In The Register Of Directors,
+    Managers And Secretaries", write it EXACTLY as shown, in full.
+  • Mention the form name ONCE inline within the relevant step, not as a separate line.""",
     }
 
     def __init__(self, feedback_store: FeedbackStore) -> None:
@@ -1965,6 +1545,7 @@ class PromptOptimizer:
             "incorrect":     "Accuracy reinforcement",
             "incomplete":    "Completeness reinforcement",
             "out_of_scope":  "Scope detection reinforcement",
+            "wrong_form": "Form accuracy reinforcement",
         }
         return [
             labels[k]
@@ -2475,6 +2056,61 @@ CLOSING
             logger.error("LLM error: %s", exc, exc_info=True)
             yield f"❌ Unexpected error: {exc}"
 
+@dataclass
+class ValidationResult:
+    passed:   bool
+    issues:   List[str]   # human-readable issue descriptions
+    response: str         # possibly corrected response
+
+def _validate_response(
+    response: str,
+    matched_forms: List[FormEntry],
+    lang: str,
+) -> ValidationResult:
+    """
+    Lightweight post-generation validator.
+    Runs in <1ms — no LLM call required.
+    Checks: hyperlink presence, truncation, SSM name correctness.
+    """
+    issues = []
+
+    # Check 1: Every matched form must be hyperlinked in the response
+    for form in matched_forms:
+        pdf  = [l for l in form.links if l.get("type") == "pdf"]
+        port = [l for l in form.links if l.get("type") in ("portal", "platform")]
+        url  = (pdf or port or [{}])[0].get("url", "")
+        if url and f"]({url})" not in response:
+            issues.append(f"Form '{form.name}' not hyperlinked")
+
+    # Check 2: Response not truncated
+    if response.strip() and not re.search(r'[.!?)\]`*\-\w]\s*$', response, re.IGNORECASE):
+        issues.append("Response appears truncated")
+
+    # Check 3: SSM name correctness
+    if re.search(r'Jabatan\s+(?:Kebangsaan\s+)?Pendaftaran\s+Syarikat', response, re.IGNORECASE):
+        issues.append("Wrong SSM name used")
+        response = re.sub(
+            r'Jabatan\s+(?:Kebangsaan\s+)?Pendaftaran\s+Syarikat',
+            'Suruhanjaya Syarikat Malaysia',
+            response,
+        )
+
+    # Check 4: OOS response contains no form links (contradiction)
+    if _OOS_PATTERN.search(response) and matched_forms and "](" in response:
+        issues.append("OOS response contains form links — inconsistent")
+
+    # Check 5: Minimum length
+    if len(response.strip()) < 30:
+        issues.append("response_too_short")
+
+    if issues:
+        logger.warning("Validator: %d issue(s) — %s", len(issues), "; ".join(issues))
+
+    return ValidationResult(
+        passed   = len(issues) == 0,
+        issues   = issues,
+        response = response,
+    )
 
 # =============================================================================
 # CACHE PRE-BUILDER  (runs on app startup)
@@ -2700,6 +2336,11 @@ def _intent_agent() -> IntentFormAgent:
             forms_data = json.load(fh)
     return IntentFormAgent(forms_data)
 
+@st.cache_resource
+def _learning_agent() -> LearningAgent:
+    from learning_agent import LearningAgent
+    return LearningAgent(feedback_store_path=_FEEDBACK_FILE)
+
 # =============================================================================
 # UTILITIES
 # =============================================================================
@@ -2738,25 +2379,6 @@ def _get_persistent_user_id() -> str:
     new_uid = str(uuid.uuid4())
     st.query_params["uid"] = new_uid
     return new_uid
-
-def _get_session_id() -> str:
-    """
-    Return a stable session ID for the current browser tab.
-    Uses Streamlit's internal session context when available,
-    falls back to a UUID stored in session_state.
-    """
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-        ctx = get_script_run_ctx()
-        if ctx and ctx.session_id:
-            return ctx.session_id
-    except Exception:
-        pass
-    # Fallback: generate once and persist in session_state
-    if "_session_uuid" not in st.session_state:
-        st.session_state["_session_uuid"] = str(uuid.uuid4())
-    return st.session_state["_session_uuid"]
-
 
 # =============================================================================
 # CSS
@@ -3198,12 +2820,6 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
                     kb.rebuild_all()
                 st.success("All cleared. Indexes rebuild on next query.")
 
-        st.divider()
-
-        if st.button("🗑️ Clear response cache"):
-            _response_cache().invalidate()
-            st.success("Response cache cleared.")
-
         # ── External links ─────────────────────────────────────────────────
         c1, c2 = st.columns(2)
         c1.link_button("SSM Portal", "https://www.ssm.com.my",   use_container_width=True)
@@ -3325,6 +2941,7 @@ def _build_section_freq(chunks: List[str]) -> Dict[tuple, int]:
 
 def _inject_form_links(text: str, forms: List[FormEntry], lang: str = "en") -> str:
     appended = []   # track forms that needed appending (not found inline)
+    any_injected = False
 
     for form in forms:
         pdf_links    = [l for l in form.links if l.get("type") == "pdf"]
@@ -3345,6 +2962,7 @@ def _inject_form_links(text: str, forms: List[FormEntry], lang: str = "en") -> s
             if new_text != text:
                 text = new_text
                 injected = True
+                any_injected = True
 
         # ── Strategy 2: form_number fallback ──────────────────────────────
         if not injected and form.form_number and not already_linked:
@@ -3355,63 +2973,31 @@ def _inject_form_links(text: str, forms: List[FormEntry], lang: str = "en") -> s
             if new_text != text:
                 text = new_text
                 injected = True
+                any_injected = True
 
-        # ── Strategy 3: guaranteed fallback — append if LLM never named the form ─
-        if not injected and not already_linked:
+        # ── Strategy 3: append only if NO form has been injected yet ──────
+        # CHANGED: was `if not injected and not already_linked`
+        # NOW: only append if this specific form wasn't linked AND no other
+        # form was successfully placed inline either.
+        if not injected and not already_linked and not any_injected:
             appended.append(f"[{form.name}]({url})")
 
     if appended:
         if lang == "ms":
-            if len(appended) == 1:
-                suffix = f"\n\nBorang berkaitan boleh diakses di sini: {appended[0]}"
-            else:
-                suffix = "\n\nBorang berkaitan boleh diakses di sini: " + ", ".join(appended)
+            suffix = (
+                f"\n\nBorang berkaitan boleh diakses di sini: {appended[0]}"
+                if len(appended) == 1
+                else "\n\nBorang berkaitan boleh diakses di sini: " + ", ".join(appended)
+            )
         else:
-            if len(appended) == 1:
-                suffix = f"\n\nYou can access the relevant form here: {appended[0]}"
-            else:
-                suffix = "\n\nYou can access the relevant forms here: " + ", ".join(appended)
+            suffix = (
+                f"\n\nYou can access the relevant form here: {appended[0]}"
+                if len(appended) == 1
+                else "\n\nYou can access the relevant forms here: " + ", ".join(appended)
+            )
         text = text.rstrip() + suffix
 
     return text
-
-def render_forms_block(
-    llm_response: str,
-    forms: List[FormEntry],
-    lang: str,
-    resolution_path: str = "",
-) -> str:
-    """
-    Deterministic form block renderer.
-    Forms are ALWAYS appended as a structured section.
-    The LLM response is never modified by search-and-replace.
-    """
-    if not forms:
-        return llm_response
-
-    if lang == "ms":
-        header = "\n\n---\n**📋 Borang Berkaitan:**"
-    else:
-        header = "\n\n---\n**📋 Relevant Form(s):**"
-
-    lines = []
-    for form in forms:
-        url = next(
-            (l["url"] for l in form.links if l.get("type") in ("pdf", "portal", "platform")),
-            None
-        )
-        if not url:
-            continue
-        icon = "🌐" if any(
-            l.get("type") == "portal" for l in form.links
-        ) else "📄"
-        num_suffix = f" ({form.form_number})" if form.form_number else ""
-        lines.append(f"\n- {icon} [{form.name}{num_suffix}]({url})")
-
-    if not lines:
-        return llm_response
-
-    return llm_response.rstrip() + header + "".join(lines)
 
 def _render_messages() -> None:
     history = st.session_state.get("chat_history", [])
@@ -3457,106 +3043,116 @@ def _render_messages() -> None:
 
 
 def _submit_feedback(
-    msg: Dict,
+    msg:  Dict,
     qa_id: str,
     rating: int,
-    failure_key: Optional[str],
-    comment: str,
-    vote: str,          # "up" or "down"
+    vote:  str,   # "up" or "down"
 ) -> None:
-    """Save feedback, optionally evict the cache entry, update session state."""
+    """
+    Save feedback and trigger autonomous diagnosis.
+
+    User-provided failure classification has been removed entirely.
+    The system diagnoses failures automatically via LearningAgent:
+      1. auto_diagnose() — rule-based, <5ms, runs in background thread
+      2. self_reflect()  — LLM-based, ~5-15s, runs in background thread
+      3. update_failure_type() — writes diagnosed type back to FeedbackStore
+      4. PromptOptimizer reads updated failure_type on next query
+
+    Users only ever see 👍 / 👎. No dropdowns. No choices.
+    """
     fb_store = _feedback_store()
     store    = _store()
-    rc       = _response_cache()
+    form_ids = [f.get("form_id", f.get("name", "")) for f in msg.get("forms", [])]
 
+    # Save immediately with failure_type="" — LearningAgent writes it back async
     fb_store.save(
         qa_id        = qa_id,
         query        = msg.get("query", ""),
         response     = msg.get("response", ""),
         citations    = msg.get("citations", []),
         rating       = rating,
-        failure_type = failure_key,
-        comment      = comment,
+        failure_type = "",          # intentionally empty — filled by auto-diagnosis
+        comment      = "",
+        form_ids     = form_ids,
+        form_correct = (True  if vote == "up"   and form_ids else
+                        False if vote == "down"              else None),
     )
     store.log_qa(
         msg.get("query", ""), msg.get("response", ""),
         msg.get("citations", []), rating, qa_id,
     )
-    # Evict incorrect cached answer so next ask re-generates a fresh response
-    if rating <= 2 and msg.get("cache_key"):
-        rc.invalidate_entry(msg["cache_key"])
 
-    st.session_state[f"fb_vote_{qa_id}"]     = vote
-    st.session_state[f"fb_submitted_{qa_id}"] = True
+    if vote == "down":
+        _intent_agent().invalidate( 
+            query = msg.get("query", ""),
+            lang  = msg.get("lang", "en"),
+        )
+        # Fire background diagnosis — user is never blocked on this
+        threading.Thread(
+            target=_learning_agent().on_negative_feedback,
+            args=(qa_id, msg.get("query", ""), msg.get("response", ""), msg.get("forms", [])),
+            daemon=True,
+        ).start()
+    else:
+        # Positive reinforcement — lock correct form mappings
+        _learning_agent().on_positive_feedback(
+            msg.get("query", ""),
+            msg.get("forms", []),
+        )
+        _intent_agent().clear_negative_rating(
+            query = msg.get("query", ""),
+            lang  = msg.get("lang", "en"),
+        )
+
+    st.session_state[f"fb_vote_{qa_id}"]      = vote
+    st.session_state[f"fb_submitted_{qa_id}"]  = True
     st.session_state.pop(f"fb_pending_{qa_id}", None)
     st.rerun()
 
 
 def _render_inline_feedback(msg: Dict, qa_id: str) -> None:
     """
-    Render thumbs-up / thumbs-down feedback bar inline inside a chat bubble.
+    Render thumbs-up / thumbs-down feedback bar.
 
     States:
-      • Default   → 👍  👎  📥  (icon buttons, borderless)
-      • 👎 clicked → failure-type dropdown + Submit / Skip
-      • Submitted  → green or red confirmation pill
+      • Default    → 👍  👎  📥  (icon buttons)
+      • 👎 clicked → instant "Thanks" confirmation + background diagnosis fires
+      • Submitted  → green (helpful) or red (not helpful) pill
+
+    The dropdown failure-type selector has been removed.
+    Failure classification is handled automatically by LearningAgent
+    running auto_diagnose() + self_reflect() in a background thread.
+    Users never have to categorize the problem themselves.
     """
     submitted_key = f"fb_submitted_{qa_id}"
-    pending_key   = f"fb_pending_{qa_id}"
 
     st.markdown('<hr class="fb-hr">', unsafe_allow_html=True)
 
-    # ── Already submitted ──────────────────────────────────────────────────
+    # ── Already submitted — show confirmation pill only ────────────────────
     if st.session_state.get(submitted_key):
         vote = st.session_state.get(f"fb_vote_{qa_id}", "up")
         if vote == "up":
             st.markdown(
-                '<span class="fb-done fb-done-up">👍&nbsp; Helpful</span>',
+                '<span class="fb-done fb-done-up">👍&nbsp; Helpful — thank you!</span>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                '<span class="fb-done fb-done-dn">👎&nbsp; Not helpful</span>',
+                '<span class="fb-done fb-done-dn">'
+                '👎&nbsp; Thanks — the system will improve from this.'
+                '</span>',
                 unsafe_allow_html=True,
             )
-        return
-
-    # ── Thumbs-down detail form ────────────────────────────────────────────
-    if st.session_state.get(pending_key) == "negative_form":
-        st.markdown("**What went wrong?** *(optional details help improve the system)*")
-
-        failure_label = st.selectbox(
-            "Failure type",
-            options=list(FeedbackStore.FAILURE_TYPES.values()),
-            key=f"fb_ft_{qa_id}",
-            label_visibility="collapsed",
-        )
-        failure_key = next(
-            k for k, v in FeedbackStore.FAILURE_TYPES.items() if v == failure_label
-        )
-        comment = st.text_area(
-            "Details",
-            placeholder="e.g. 'Section 17 was cited but the answer quoted Section 18'",
-            key=f"fb_comment_{qa_id}",
-            max_chars=3000,
-            label_visibility="collapsed",
-        )
-        col_sub, col_skip, _ = st.columns([2, 2, 5])
-        if col_sub.button("Submit", key=f"fb_sub_{qa_id}", type="primary"):
-            _submit_feedback(msg, qa_id, 1, failure_key, comment, vote="down")
-        if col_skip.button("Skip", key=f"fb_skip_{qa_id}"):
-            _submit_feedback(msg, qa_id, 1, None, "", vote="down")
         return
 
     # ── Default: icon buttons row ──────────────────────────────────────────
     col_up, col_dn, col_dl, _ = st.columns([1, 1, 1, 10])
 
     if col_up.button("👍", key=f"fb_up_{qa_id}", help="Helpful"):
-        _submit_feedback(msg, qa_id, 5, None, "", vote="up")
+        _submit_feedback(msg, qa_id, rating=5, vote="up")
 
     if col_dn.button("👎", key=f"fb_dn_{qa_id}", help="Not helpful"):
-        st.session_state[pending_key] = "negative_form"
-        st.rerun()
+        _submit_feedback(msg, qa_id, rating=1, vote="down")
 
     cits     = ", ".join(msg.get("citations", []))
     cats_str = ", ".join(msg.get("categories_hit", []))
@@ -3717,15 +3313,29 @@ def main() -> None:
         opt   = _optimizer()
         memory: ConversationMemory = st.session_state["conv_memory"]
         lang = _detect_language(user_input)
+        timestamp = datetime.now().isoformat()
+        qa_id     = _make_qa_id(user_input, timestamp)
 
         # ── Short-circuit for greetings — no retrieval needed ─────────────────
         if _GREETING_RE.match(user_input.strip()):
-            greeting_response = _GREETING_RESPONSES.get(lang, _GREETING_RESPONSES["en"])
+            _GREETING_SYSTEM = (
+                "You are ChatSSM, a legal assistant for Malaysian company law (SSM). "
+                "Respond warmly to greetings in 1-2 sentences. "
+                "Mention you can help with Companies Act, LLP Act, business registration, or SSM matters. "
+                "Match the user's language exactly. Never use bullet points."
+            )
+            try:
+                greeting_response = "".join(
+                    llm._call(user_input, system=_GREETING_SYSTEM, temp_override=0.7)
+                ).strip()
+                greeting_response = re.sub(r"<think>.*?</think>", "", greeting_response, flags=re.DOTALL).strip()
+                if len(greeting_response) < 10:
+                    raise ValueError("too short")
+            except Exception:
+                greeting_response = _GREETING_RESPONSES.get(lang, _GREETING_RESPONSES["en"])
             with st.chat_message("assistant", avatar="⚖️"):
                 st.markdown(greeting_response)
             # Save to history but do NOT cache — greetings are trivial
-            timestamp = datetime.now().isoformat()
-            qa_id     = _make_qa_id(user_input, timestamp)
             memory.add_turn(user_input, greeting_response)
             record = {
                 "qa_id":          qa_id,
@@ -3734,7 +3344,6 @@ def main() -> None:
                 "citations":      [],
                 "categories_hit": [],
                 "timestamp":      timestamp,
-                "cache_key":      "",
             }
             st.session_state["chat_history"].append(record)
             store.save_history(st.session_state["chat_history"], uid)
@@ -3769,10 +3378,6 @@ def main() -> None:
                     ref = (m.group(1).lower(), m.group(2).lower() if m.group(2) else None)
                     _freq[ref] = 1
 
-            # Persist section context for multi-turn follow-ups
-            if _freq:
-                st.session_state["_last_sections"] = _freq
-
             # ── Intent agent: resolve forms ────────────────────────────────
             agent      = _intent_agent()
             conv_turns = st.session_state["conv_memory"]._turns
@@ -3789,7 +3394,7 @@ def main() -> None:
                     form_id      = "",
                     form_number  = f.get("form_number", ""),
                     name         = f["name"],
-                    links        = [{"type": f.get("resource_type", "pdf"), "url": f["url"]}]
+                    links        = [{"type": f.get("link_type", "pdf"), "url": f["url"]}]
                                    if f.get("url") else [],
                     related_sections = [],
                     resource_type    = f.get("resource_type", "form"),
@@ -3805,8 +3410,6 @@ def main() -> None:
                 and resolution.intent.confidence > 0.0
             )
             
-            rc = _response_cache()
-            cached = rc.get(user_input, selected_keys, cat_filter, lang)
             patches  = opt.get_patches()
 
             if matched_forms:
@@ -3829,15 +3432,15 @@ def main() -> None:
                         f"\nFORM INSTRUCTION (MANDATORY):\n"
                         f"The following form(s) are required for this procedure:\n{form_lines}\n"
                         f"You MUST write the form name(s) EXACTLY as shown above — do NOT shorten, "
-                        f"paraphrase, or rename them. Include the exact name in one natural sentence "
-                        f"at the end of your answer.\n"
-                        f"Example: \"You will need to submit the [exact form name] to the Registrar.\"\n"
+                        f"paraphrase, or rename them, and do NOT reverse direction words "
+                        f"(e.g. 'public to private' must not become 'private to public'). "
+                        f"Copy the name CHARACTER FOR CHARACTER. "
+                        f"Mention the exact name INLINE within the relevant step in your answer.\n"
+                        f"Do NOT add a trailing sentence after your answer.\n"
                         f"Do NOT include any URL or link.\n"
                     )
             else:
                 form_hint = ""
-
-            
 
         response = (
                     "No relevant sections were found in the selected knowledge sources. "
@@ -3845,32 +3448,159 @@ def main() -> None:
                     "licensed professional."
                 )
 
-        if cached:
-            response = cached["response"]
-            # Inject hyperlinks into the cached response (links are already stored
-            # in the response, but re-inject from matched_forms in case the cache
-            # was saved before inject was applied in earlier sessions).
-            if matched_forms:
-                response = _inject_form_links(response, matched_forms, lang=lang)
+        if not result["chunks"]:
+            with st.chat_message("assistant", avatar="⚖️"):
+                st.markdown(response)
+
+        else:
+            system = llm._SYSTEM_BASE
+            if patches:
+                system += f"\n{patches}\n"
+            act_hint = (
+                f"\nSCOPE: This query is about the {result.get('detected_act')}. "
+                f"Answer ONLY from chunks belonging to that Act. "
+                f"Do NOT cite sections from other Acts unless the user explicitly asked.\n"
+            ) if result.get("detected_act") else ""
+
+            context_parts = []
+            chunk_types_list = result.get("chunk_types", [])
+
+            for i, chunk in enumerate(result["chunks"]):
+                src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
+                ctype = chunk_types_list[i] if i < len(chunk_types_list) else "text"
+                type_label = " | VISUAL CONTENT" if ctype == "visual" else ""
+                if len(chunk) > AppConfig.MAX_CHUNK_CHARS:
+                    if "[TABLE]" in chunk:
+                        # Find the last complete table row before the limit
+                        cut = chunk.rfind("\n", 0, AppConfig.MAX_TABLE_CHARS)
+                        safe_chunk = chunk[:cut] if cut > 0 else chunk[:AppConfig.MAX_TABLE_CHARS]
+                    else:
+                        cut = AppConfig.MAX_CHUNK_CHARS
+                        for m in re.finditer(r'(?<=[.!?])\s', chunk[:AppConfig.MAX_CHUNK_CHARS]):
+                            cut = m.end()
+                        safe_chunk = chunk[:cut] if cut > 60 else chunk[:AppConfig.MAX_CHUNK_CHARS]
+                else:
+                    safe_chunk = chunk
+                context_parts.append(f"[SOURCE: {src}{type_label}]\n{safe_chunk}\n[/SOURCE: {src}]")
+            context_block = "\n\n".join(context_parts)
+            history_block = memory.build_history_block()
+            # Build memory block using the query embedding.
+            # _emb().embed() hits the in-memory cache (populated by kb.search
+            # moments earlier) so this costs ~0ms — no extra Ollama call.
+            _query_vec = _emb().embed(search_query)
+            memory_block = st.session_state["mem_mgr"].build_memory_block(
+                query_vec=_query_vec,
+                query_text=search_query, 
+            )
+
+            if lang == "ms":
+                lang_directive = "⚠️ WAJIB: Jawab SEPENUHNYA dalam Bahasa Malaysia. Jangan gunakan bahasa Inggeris langsung.\n"
+            elif lang == "mixed":
+                lang_directive = "NOTE: User mixed Malay and English. Respond in English, Malay legal terms are acceptable.\n"
+            else:
+                lang_directive = ""
+
+            prompt = (
+                f"/no_think\n{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}{form_hint}"
+                f"Before writing, identify the single most relevant section in the CONTEXT above.\n"
+                f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
+            )
+
+            def _stream_with_retry(p: str, s: str, temp: Optional[float] = None):
+                """Run one LLM call; return (generator, first_token_or_None)."""
+                gen   = llm._call(p, s, temp_override=temp)
+                first = next(gen, None)
+                return gen, first
+            
+            raw_tokens  = []
+
+            with st.spinner("_Generating response..._"):
+                try:
+                    gen, first_token = _stream_with_retry(prompt, system)
+                except Exception as exc:
+                    gen, first_token = iter([]), f"❌ Error during generation: {exc}"
+                    logger.error("LLM call failed before first token: %s", exc, exc_info=True)
+
             with st.chat_message("assistant", avatar="⚖️"):
                 stream_box = st.empty()
-                words = response.split(" ")
-                buf = ""
-                for i, word in enumerate(words):
-                    buf += ("" if i == 0 else " ") + word
-                    if i % 8 == 7:
-                        stream_box.markdown(buf + "▌")
-                        time.sleep(0.04)
-                stream_box.markdown(response)
-                if ask_user_for_form:
-                    msg = (
+                try:
+                    if first_token:
+                        raw_tokens.append(first_token)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+
+                    for token in gen:
+                        raw_tokens.append(token)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+
+                except Exception as exc:
+                    raw_tokens.append(f"\n\n❌ Error during streaming: {exc}")
+                    logger.error("Streaming error in main(): %s", exc, exc_info=True)
+
+                raw = "".join(raw_tokens)
+                if raw.startswith("❌"):
+                    stream_box.markdown(raw)
+                    response = raw
+
+                truncated = (
+                    raw.strip()
+                    and not re.search(r'[.!?)\]`*|\-\w]\s*$', raw, re.IGNORECASE)
+                    and not raw.startswith("❌")
+                )
+                if (len(raw.strip()) < 30 or truncated) and not raw.startswith("❌"):
+                    logger.warning("LLM response too short or truncated; retrying once.")
+                    stream_box.markdown("_Response was too short, retrying once..._")
+                    raw_tokens = []
+
+                    with st.spinner("_Retrying generation..._"):
+                        try:
+                            gen2, first2 = _stream_with_retry(prompt, system, temp=0.15)
+                        except Exception as exc:
+                            gen2 = iter([])
+                            first2 = None
+                            logger.error("LLM retry failed: %s", exc, exc_info=True)
+                    
+                    if first2 and not str(first2).startswith("❌"):
+                        stream_box.empty()
+                        raw_tokens.append(first2)
+                        stream_box.markdown("".join(raw_tokens) + "▌")
+                        for token in gen2:
+                            raw_tokens.append(token)
+                            stream_box.markdown("".join(raw_tokens) + "▌")
+                        raw = "".join(raw_tokens)
+                    else:
+                        # Retry also failed — show a clear, helpful message
+                        response = (
+                            "I wasn't able to generate a response for this question. "
+                            "This can happen with complex or ambiguous queries. "
+                            "Please try rephrasing your question, or break it into smaller parts."
+                        )
+                        raw = ""
+                        stream_box.markdown(response)
+
+                if raw.strip():
+                    response = llm._postprocess(raw, lang=lang)
+                    if matched_forms:
+                        response = _inject_form_links(response, matched_forms, lang=lang)
+
+                    validation = _validate_response(response, matched_forms, lang)
+                    response = validation.response   # use corrected response
+
+                    if not validation.passed:
+                        logger.warning("Validator issues: %s", validation.issues)
+                    _learning_agent().observe(user_input, response, [f.__dict__ for f in matched_forms])
+                        
+                    stream_box.markdown(response)
+
+                elif ask_user_for_form:
+                    confirm_msg = (
                         "Berdasarkan soalan anda, prosedur ini mungkin memerlukan borang. "
                         "Adakah anda ingin saya paparkan borang yang berkaitan?"
                         if lang == "ms" else
-                        "Based on your question, this process may require a form. "
+                        "Based on your question, this process may require a form to be submitted. "
                         "Would you like me to show the relevant form?"
                     )
-                    st.info(msg, icon="📋")
+                    st.info(confirm_msg, icon="📋")
                     col_yes, col_no, _ = st.columns([2, 2, 6])
                     if col_yes.button("✅ Yes, show form", key=f"form_yes_{qa_id}"):
                         st.session_state["prefill"] = user_input
@@ -3878,161 +3608,8 @@ def main() -> None:
                         st.rerun()
                     if col_no.button("❌ No thanks", key=f"form_no_{qa_id}"):
                         st.session_state.pop("pending_form_query", None)
-        else:
-            if not result["chunks"]:
-                with st.chat_message("assistant", avatar="⚖️"):
-                    st.markdown(response)
+                        st.session_state.pop("force_show_forms", None)
 
-            else:
-                system = llm._SYSTEM_BASE
-                if patches:
-                    system += f"\n{patches}\n"
-                act_hint = (
-                    f"\nNOTE: This query relates to the {result.get('detected_act')}. "
-                    f"Prioritize chunks from that Act when constructing your answer.\n"
-                ) if result.get("detected_act") else ""
-
-                context_parts = []
-                chunk_types_list = result.get("chunk_types", [])
-
-                for i, chunk in enumerate(result["chunks"]):
-                    src = result["chunk_sources"][i] if i < len(result["chunk_sources"]) else f"Source {i+1}"
-                    ctype = chunk_types_list[i] if i < len(chunk_types_list) else "text"
-                    type_label = " | VISUAL CONTENT" if ctype == "visual" else ""
-                    if len(chunk) > AppConfig.MAX_CHUNK_CHARS:
-                        if "[TABLE]" in chunk:
-                            # Find the last complete table row before the limit
-                            cut = chunk.rfind("\n", 0, AppConfig.MAX_TABLE_CHARS)
-                            safe_chunk = chunk[:cut] if cut > 0 else chunk[:AppConfig.MAX_TABLE_CHARS]
-                        else:
-                            cut = AppConfig.MAX_CHUNK_CHARS
-                            for m in re.finditer(r'(?<=[.!?])\s', chunk[:AppConfig.MAX_CHUNK_CHARS]):
-                                cut = m.end()
-                            safe_chunk = chunk[:cut] if cut > 60 else chunk[:AppConfig.MAX_CHUNK_CHARS]
-                    else:
-                        safe_chunk = chunk
-                    context_parts.append(f"[SOURCE: {src}{type_label}]\n{safe_chunk}\n[/SOURCE: {src}]")
-                context_block = "\n\n".join(context_parts)
-                history_block = memory.build_history_block()
-                # Build memory block using the query embedding.
-                # _emb().embed() hits the in-memory cache (populated by kb.search
-                # moments earlier) so this costs ~0ms — no extra Ollama call.
-                _query_vec = _emb().embed(search_query)
-                memory_block = st.session_state["mem_mgr"].build_memory_block(
-                    query_vec=_query_vec,
-                    query_text=search_query, 
-                )
-
-                if lang == "ms":
-                    lang_directive = "⚠️ WAJIB: Jawab SEPENUHNYA dalam Bahasa Malaysia. Jangan gunakan bahasa Inggeris langsung.\n"
-                elif lang == "mixed":
-                    lang_directive = "NOTE: User mixed Malay and English. Respond in English, Malay legal terms are acceptable.\n"
-                else:
-                    lang_directive = ""
-
-                prompt = (
-                    f"/no_think\n{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
-                    f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}{form_hint}"
-                    f"Before writing, identify the single most relevant section in the CONTEXT above.\n"
-                    f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
-                )
-
-                def _stream_with_retry(p: str, s: str, temp: Optional[float] = None):
-                    """Run one LLM call; return (generator, first_token_or_None)."""
-                    gen   = llm._call(p, s, temp_override=temp)
-                    first = next(gen, None)
-                    return gen, first
-                
-                raw_tokens  = []
-
-                with st.spinner("_Generating response..._"):
-                    try:
-                        gen, first_token = _stream_with_retry(prompt, system)
-                    except Exception as exc:
-                        gen, first_token = iter([]), f"❌ Error during generation: {exc}"
-                        logger.error("LLM call failed before first token: %s", exc, exc_info=True)
-
-                with st.chat_message("assistant", avatar="⚖️"):
-                    stream_box = st.empty()
-                    try:
-                        if first_token:
-                            raw_tokens.append(first_token)
-                            stream_box.markdown("".join(raw_tokens) + "▌")
-
-                        for token in gen:
-                            raw_tokens.append(token)
-                            stream_box.markdown("".join(raw_tokens) + "▌")
-
-                    except Exception as exc:
-                        raw_tokens.append(f"\n\n❌ Error during streaming: {exc}")
-                        logger.error("Streaming error in main(): %s", exc, exc_info=True)
-
-                    raw = "".join(raw_tokens)
-
-                    truncated = (
-                        raw.strip()
-                        and not re.search(r'[.!?)\]`*|\-\w]\s*$', raw, re.IGNORECASE)
-                        and not raw.startswith("❌")
-                    )
-                    if (len(raw.strip()) < 30 or truncated) and not raw.startswith("❌"):
-                        logger.warning("LLM response too short or truncated; retrying once.")
-                        stream_box.markdown("_Response was too short, retrying once..._")
-                        raw_tokens = []
-
-                        with st.spinner("_Retrying generation..._"):
-                            try:
-                                gen2, first2 = _stream_with_retry(prompt, system, temp=0.15)
-                            except Exception as exc:
-                                gen2 = iter([])
-                                first2 = None
-                                logger.error("LLM retry failed: %s", exc, exc_info=True)
-                        
-                        if first2 and not str(first2).startswith("❌"):
-                            stream_box.empty()
-                            raw_tokens.append(first2)
-                            stream_box.markdown("".join(raw_tokens) + "▌")
-                            for token in gen2:
-                                raw_tokens.append(token)
-                                stream_box.markdown("".join(raw_tokens) + "▌")
-                            raw = "".join(raw_tokens)
-                        else:
-                            # Retry also failed — show a clear, helpful message
-                            response = (
-                                "I wasn't able to generate a response for this question. "
-                                "This can happen with complex or ambiguous queries. "
-                                "Please try rephrasing your question, or break it into smaller parts."
-                            )
-                            raw = ""
-                            stream_box.markdown(response)
-
-                    if raw.strip():
-                        response = llm._postprocess(raw, lang=lang)
-                        if matched_forms:
-                            response = _inject_form_links(response, matched_forms, lang=lang)
-                        if not _OOS_PATTERN.search(response):
-                            rc.put(user_input, selected_keys, cat_filter,
-                                response, result.get("citations", []), result.get("categories_hit", []), lang)
-                        stream_box.markdown(response)
-                    elif ask_user_for_form:
-                        confirm_msg = (
-                            "Berdasarkan soalan anda, prosedur ini mungkin memerlukan borang. "
-                            "Adakah anda ingin saya paparkan borang yang berkaitan?"
-                            if lang == "ms" else
-                            "Based on your question, this process may require a form to be submitted. "
-                            "Would you like me to show the relevant form?"
-                        )
-                        st.info(confirm_msg, icon="📋")
-                        col_yes, col_no, _ = st.columns([2, 2, 6])
-                        if col_yes.button("✅ Yes, show form", key=f"form_yes_{qa_id}"):
-                            st.session_state["prefill"] = user_input
-                            st.session_state["force_show_forms"] = True
-                            st.rerun()
-                        if col_no.button("❌ No thanks", key=f"form_no_{qa_id}"):
-                            st.session_state.pop("pending_form_query", None)
-                            st.session_state.pop("force_show_forms", None)
-
-        timestamp = datetime.now().isoformat()
-        qa_id     = _make_qa_id(user_input, timestamp)
         memory.add_turn(user_input, response)
         # Inspect the user's message for memory-worthy content (preferences,
         # corrections, instructions).  Never called on the LLM response to
@@ -4047,7 +3624,6 @@ def main() -> None:
             "citations":      result.get("citations", []),
             "categories_hit": result.get("categories_hit", []),
             "timestamp":      timestamp,
-            "cache_key":      ResponseCache._make_key(user_input, selected_keys, cat_filter, lang),
             "forms": [
                 {
                     "form_number": f.form_number,
