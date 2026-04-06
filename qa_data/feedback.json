@@ -1,227 +1,5 @@
 [
   {
-    "qa_id": "a54d509eba57",
-    "timestamp": "2026-03-02T16:13:46.885260",
-    "query": "How to apply Striking Off?",
-    "response_snippet": "To apply for Striking Off under Section 549(a) of the Companies Act 2016:\n\n1.  **Eligibility:** The company must be a body corporate, not a holding company, not involved in legal proceedings, not making a return of capital, and not being wound up (unless specific conditions under Section 549(d) are ",
-    "citations": [
-      "Guidelines For Striking Off Section 549(a)",
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar",
-      "Guidelines For Striking Off Section 549(d)"
-    ],
-    "rating": 5,
-    "failure_type": "",
-    "comment": ""
-  },
-  {
-    "qa_id": "08bb505079dc",
-    "timestamp": "2026-03-02T16:20:51.770587",
-    "query": "how much to incorporate private company",
-    "response_snippet": "To incorporate a private company, the application fee is RM200. This fee is mentioned in the checklist for CLBG under Section 45 Companies Act 2016, point A.1.",
-    "citations": [
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "FAQ - INCORPORATION",
-      "FAQs ON THE COMPANIES ACT 2016 (ACT 777) [BACKGROUND TO THE REVIEW PROCESS AND NEW MALAYSIAN COMPANIES ACT]",
-      "Checklist for CLBG (1-8)"
-    ],
-    "rating": 1,
-    "failure_type": "wrong_source",
-    "comment": "The right answer is Section 14 of Company Act 2016"
-  },
-  {
-    "qa_id": "7ab0d412f004",
-    "timestamp": "2026-03-04T12:25:43.730575",
-    "query": "what is meant by dormant company?",
-    "response_snippet": "**Direct Answer**\nA company is dormant in a financial year if the company does not carry on business and there is no accounting transaction occurred. **(Practice Directive 10/2024, paragraph 11(a))**\n\n**Relevant Provisions**\n- Section 245(1), Companies Act 2016: \"Accounting transaction\" means a tran",
-    "citations": [
-      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
-      "FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING",
-      "FAQ - AUDIT EXEMPTION",
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Guidelines For Striking Off Section 549(a)",
-      "Practice Directive 2/2017 (Revised) - Notification of Change in the Business Address (including Branches) and/or Nature of Business",
-      "Companies (Corporate Rescue Mechanism) Rules 2018"
-    ],
-    "rating": 5,
-    "failure_type": "",
-    "comment": ""
-  },
-  {
-    "qa_id": "e9f33a048094",
-    "timestamp": "2026-03-11T15:36:02.628579",
-    "query": "help me draft the application",
-    "response_snippet": "To draft a valid application for company registration under the **Companies Act 2016**, your company must include the following details as specified in **Section 14(3)**:  \n\n1. **Proposed company name**: Ensure it complies with the **Guidelines on Company Names** (issued under Section 20C of the Com",
-    "citations": [
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
-      "Guidelines on Asset Management (section 556 and 558) (Revised)",
-      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar",
-      "Checklist for CLBG (1-8)",
-      "Guidelines For Striking Off Section 549(a)"
-    ],
-    "rating": 1,
-    "failure_type": "incorrect",
-    "comment": "The RM100 fee applies to each subsidiary company held by a Company Limited by Guarantee (CLBG)"
-  },
-  {
-    "qa_id": "e7c96bc69bf2",
-    "timestamp": "2026-03-12T15:26:50.495615",
-    "query": "how to register company",
-    "response_snippet": "To register a company in Malaysia, you’ll need to pay specific fees depending on the type of company you’re forming. According to **Companies Regulations 2017 (Regulation 8)**, the fees are as follows:  \n- **Company limited by share**: RM 1,000.00  \n- **Company limited by guarantee**: RM 3,000.00  \n",
-    "citations": [
-      "Circular 1/2020 - Guidance Notes on the Registration of Firms of Liquidators and Notification on the Approval as an Approved Liquidator (Amended on 1 April 2024)",
-      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
-      "FAQ - EXECUTION OF DOCUMENTS",
-      "FAQ - MEETINGS AND DECISION MAKING",
-      "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
-      "Companies Regulations 2017",
-      "Prescription of Amount of Indebtedness of Company under paragraph 466(1)(a) (GN No. 21841 of 2020)",
-      "Practice Directive 5/2018 – Lodgement of Annual Return and Changes or Updates of Particulars of a Company to be Lodged in the Annual Return"
-    ],
-    "rating": 1,
-    "failure_type": "incomplete",
-    "comment": ""
-  },
-  {
-    "qa_id": "69aba6f52877",
-    "timestamp": "2026-03-12T15:28:34.877231",
-    "query": "how to register company",
-    "response_snippet": "To register a company in Malaysia, you’ll need to pay specific fees depending on the type of company you’re forming. According to **Companies Regulations 2017 (Regulation 8)**, the fees are as follows:  \n- **Company limited by share**: RM 1,000.00  \n- **Company limited by guarantee**: RM 3,000.00  \n",
-    "citations": [
-      "Circular 1/2020 - Guidance Notes on the Registration of Firms of Liquidators and Notification on the Approval as an Approved Liquidator (Amended on 1 April 2024)",
-      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
-      "FAQ - EXECUTION OF DOCUMENTS",
-      "FAQ - MEETINGS AND DECISION MAKING",
-      "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
-      "Companies Regulations 2017",
-      "Prescription of Amount of Indebtedness of Company under paragraph 466(1)(a) (GN No. 21841 of 2020)",
-      "Practice Directive 5/2018 – Lodgement of Annual Return and Changes or Updates of Particulars of a Company to be Lodged in the Annual Return"
-    ],
-    "rating": 1,
-    "failure_type": "incomplete",
-    "comment": ""
-  },
-  {
-    "qa_id": "515f02563e82",
-    "timestamp": "2026-03-16T14:37:58.402301",
-    "query": "how to register company",
-    "response_snippet": "I couldn't find this in the documents I have access to. For this specific question, I'd recommend checking directly with SSM or consulting a licensed company secretary. The CONTEXT provided does not contain information about the procedure to register a company.",
-    "citations": [
-      "Circular 1/2020 - Guidance Notes on the Registration of Firms of Liquidators and Notification on the Approval as an Approved Liquidator (Amended on 1 April 2024)",
-      "FAQ - ACCOUNTS, AUDIT, ANNUAL GENERAL MEETINGS",
-      "FAQ - ANNUAL RETURNS AND FINANCIAL REPORTING",
-      "FAQ - AUDITOR",
-      "FAQ - EXECUTION OF DOCUMENTS",
-      "FAQ - MEETINGS AND DECISION MAKING",
-      "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
-      "Companies (Company Auditor and Liquidator Fees) Regulations 2020"
-    ],
-    "rating": 1,
-    "failure_type": "other",
-    "comment": ""
-  },
-  {
-    "qa_id": "617544ca943e",
-    "timestamp": "2026-03-16T15:15:55.738820",
-    "query": "procedure to strike of company",
-    "response_snippet": "I couldn't find this in the documents I have access to. For this specific question, I'd recommend checking directly with SSM or consulting a licensed company secretary. The CONTEXT provided does not contain information about the procedure to strike off a company.",
-    "citations": [
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Guidelines For Striking Off Section 549(a)",
-      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar",
-      "Guidelines For Striking Off Section 549(d)"
-    ],
-    "rating": 1,
-    "failure_type": "other",
-    "comment": ""
-  },
-  {
-    "qa_id": "b3a48544a507",
-    "timestamp": "2026-03-16T15:34:30.577778",
-    "query": "cara daftar syarikat",
-    "response_snippet": "Untuk mendaftarkan syarikat di Malaysia, langkah-langkah utama adalah seperti berikut:  \n\n1. **Pilih nama syarikat** yang memenuhi syarat. Nama tersebut **tidak boleh identik dengan nama syarikat yang sedia wujud** atau nama yang sedang disimpan oleh Jabatan Kementerian Kewangan (Section 26(1), Comp",
-    "citations": [
-      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
-      "Companies Regulations 2017",
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Guidelines For Striking Off Section 549(a)",
-      "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017"
-    ],
-    "rating": 1,
-    "failure_type": "hallucination",
-    "comment": "Jabatan Kementerian Kewangan does not exist in documents. You are refering to Suruhanjaya Syarikat Malaysia (SSM)"
-  },
-  {
-    "qa_id": "1e49ef8cc503",
-    "timestamp": "2026-03-17T08:59:56.377638",
-    "query": "how to register company?",
-    "response_snippet": "I couldn't find this in the documents I have access to. For this specific question, I'd recommend checking directly with SSM or consulting a licensed company secretary. The CONTEXT provided does not contain information about the procedure to register a company.",
-    "citations": [
-      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
-      "Companies Regulations 2017",
-      "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017",
-      "Guidelines For Striking Off Section 549(a)",
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Limited Liability Partnership Act 2012 (Act 743) - 1 Mar 2017",
-      "Practice Directive 1/2017 (Revised) - Documents under the Companies Act 2016, the Lodgement Requirements and Related Matters",
-      "FAQ - NOTIFICATION OF PARTICULARS AND CHANGE IN REGISTER OF DIRECTORS, MANAGER AND SECRETARIES",
-      "Circular 1/2020 - Guidance Notes on the Registration of Firms of Liquidators and Notification on the Approval as an Approved Liquidator (Amended on 1 April 2024)"
-    ],
-    "rating": 1,
-    "failure_type": "other",
-    "comment": ""
-  },
-  {
-    "qa_id": "7c35a03daee0",
-    "timestamp": "2026-03-17T09:00:15.771379",
-    "query": "cara jadi pengarah",
-    "response_snippet": "I couldn't find this in the documents I have access to. For this specific question, I'd recommend checking directly with SSM or consulting a licensed company secretary. The CONTEXT provided does not contain information about the procedure to become a director.",
-    "citations": [
-      "Guidelines Relating to the Obligations of Company Secretary as a Reporting Institution Under the Anti-Money Laundering, Anti-Terrorism Financing and Proceeds of Unlawful Activities Act 2001 (AMLA)",
-      "FAQs ON THE COMPANIES (AMENDMENT) BILL 2019",
-      "Direction of the Minister under paragraph 26(1)(d) and section 564 (Gazette Notification for Application of Company Name)",
-      "Companies (Amendment) Act 2019"
-    ],
-    "rating": 1,
-    "failure_type": "other",
-    "comment": ""
-  },
-  {
-    "qa_id": "b8f75d7de67b",
-    "timestamp": "2026-03-17T09:00:34.436995",
-    "query": "how to register company",
-    "response_snippet": "I couldn't find this in the documents I have access to. For this specific question, I'd recommend checking directly with SSM or consulting a licensed company secretary. The CONTEXT provided does not contain information about the procedure to register a company.",
-    "citations": [
-      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
-      "Companies Regulations 2017",
-      "Guidelines For Striking Off Section 549(a)",
-      "Companies Act 2016 (Act 777) - 1 Aug 2022",
-      "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017"
-    ],
-    "rating": 1,
-    "failure_type": "other",
-    "comment": ""
-  },
-  {
-    "qa_id": "6b9c5a3463b9",
-    "timestamp": "2026-03-17T12:10:53.824271",
-    "query": "mcm mana nak daftar bisnes",
-    "response_snippet": "To register a business in Malaysia, you must apply to the Registrar under the **Registration of Businesses Act 1956**. Here’s how to proceed:  \n\n1. **Apply within 30 days**: The person responsible for the business must apply to the Registrar **no later than 30 days from the date the business starts*",
-    "citations": [
-      "Guidelines Relating to the Obligations of Company Secretary as a Reporting Institution Under the Anti-Money Laundering, Anti-Terrorism Financing and Proceeds of Unlawful Activities Act 2001 (AMLA)",
-      "Direction of the Minister under paragraph 26(1)(d) and section 564 (Gazette Notification for Application of Company Name)",
-      "FAQs ON THE COMPANIES (AMENDMENT) BILL 2019",
-      "Companies (Amendment) Act 2019",
-      "ACT ROB 1956",
-      "Guidelines on Asset Management (section 556 and 558) (Revised)",
-      "Registration of Businesses Act 1956 (Act 197) - 1 Jun 2017"
-    ],
-    "rating": 5,
-    "failure_type": "",
-    "comment": ""
-  },
-  {
     "qa_id": "bd4316cde379",
     "timestamp": "2026-04-01T11:57:56.834984",
     "query": "how to remove foreign company",
@@ -572,6 +350,56 @@
     "form_ids": [
       "Statutory Declaration On Entitlement To Commence Business By A Public Company/Conversion Of Company Status From Private Company To Public Company",
       "Notice Of Conversion From A Private Company To A Public Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "d99031e45f63",
+    "timestamp": "2026-04-02T11:23:44.725434",
+    "query": "I'm from tanzania and want to open a company in malaysia. what should I do",
+    "response_snippet": "To register a foreign company in Malaysia, you must follow these steps:  \n\n1. **Prepare the [Application For Registration Of Foreign Company ([Form 79 & 80](https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20562(1)(fa)%20170524.pdf))](https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "FAQ - INCORPORATION",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Checklist for CLBG (1-8)",
+      "Companies Act 2016: Practice Note No. 6/2024: Notification of Approval as an Approved Liquidator",
+      "Companies Act 2016 : Practice Note No. 3/2018: Clarification on Application for Extension of Time under the Companies Act 2016",
+      "Practice Directive 9/2024 - Lodgement of Beneficial Ownership Information under the Companies Act 2016 Through e-BOS (Revised)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Application For Registration Of Foreign Company"
+    ],
+    "form_correct": false,
+    "auto_diagnosed": true
+  },
+  {
+    "qa_id": "d99031e45f63",
+    "timestamp": "2026-04-02T12:00:46.805321",
+    "query": "I'm from tanzania and want to open a company in malaysia. what should I do",
+    "response_snippet": "To register a foreign company in Malaysia, you must follow these steps:  \n\n1. **Prepare the [Application For Registration Of Foreign Company ([Form 79 & 80](https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20562(1)(fa)%20170524.pdf))](https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202",
+    "citations": [
+      "Companies Act 2016 (Act 777) - 1 Aug 2022",
+      "FAQ - INCORPORATION",
+      "Guidelines on Company Names (also refer Gazette Notification for Application of Company Name)",
+      "Checklist for CLBG (1-8)",
+      "Companies Act 2016: Practice Note No. 6/2024: Notification of Approval as an Approved Liquidator",
+      "Companies Act 2016 : Practice Note No. 3/2018: Clarification on Application for Extension of Time under the Companies Act 2016",
+      "Practice Directive 9/2024 - Lodgement of Beneficial Ownership Information under the Companies Act 2016 Through e-BOS (Revised)",
+      "Practice Directive 10/2024 - Qualifying Criteria For Audit Exemption For Certain Private Companies In Malaysia",
+      "Companies Act 2016 : Practice Note No. 5/2019: Queries Issued on Documents and Applications Lodged with the Registrar"
+    ],
+    "rating": 1,
+    "failure_type": "wrong_form",
+    "comment": "",
+    "form_ids": [
+      "Application For Registration Of Foreign Company"
     ],
     "form_correct": false,
     "auto_diagnosed": true

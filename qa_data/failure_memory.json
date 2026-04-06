@@ -207,5 +207,56 @@
     "timestamp": "2026-04-02T09:36:13.718649",
     "rating": 1,
     "correction_applied": false
+  },
+  {
+    "query": "I'm from tanzania and want to open a company in malaysia. what should I do",
+    "query_hash": "9e681379",
+    "response_snippet": "To register a foreign company in Malaysia, you must follow these steps:  \n\n1. **Prepare the [Application For Registration Of Foreign Company ([Form 79 & 80](https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20562(1)(fa)%20170524.pdf))](https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/application_for_registration_of_foreign_company_form_79_80.pdf)** (form name must be used verbatim)",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "application for registration of foreign company ([form 79 & 80"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      }
+    ],
+    "root_agent": "form_mapping",
+    "reflection_note": "Auto-diagnosed: form_hallucination",
+    "timestamp": "2026-04-02T11:23:51.891559",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "how to convert to private company",
+    "query_hash": "6543e2b3",
+    "response_snippet": "To convert your company to a private company, follow these steps:  \n\n1. **Pass a Special Resolution**: Hold a general meeting and obtain approval from shareholders via a special resolution. This resolution must explicitly state the intent to convert to a private company. **(Section 41(1), Companies Act 2016)**  \n\n2. **Prepare the Notice of Conversion Form**: Complete and submit the **[Notice Of Co",
+    "auto_issues": [],
+    "root_agent": "retrieval",
+    "reflection_note": "The response failed to provide the full text of the Notice Of Conversion Form and did not include the necessary legal references for proper conversion.",
+    "timestamp": "2026-04-02T11:59:27.336813",
+    "rating": 1,
+    "correction_applied": false
+  },
+  {
+    "query": "I'm from tanzania and want to open a company in malaysia. what should I do",
+    "query_hash": "9e681379",
+    "response_snippet": "To register a foreign company in Malaysia, you must follow these steps:  \n\n1. **Prepare the [Application For Registration Of Foreign Company ([Form 79 & 80](https://www.ssm.com.my/Pages/Legal_Framework/Document/s%20562(1)(fa)%20170524.pdf))](https://www.ssm.com.my/Pages/Legal_Framework/PDF%20Tab%202/application_for_registration_of_foreign_company_form_79_80.pdf)** (form name must be used verbatim)",
+    "auto_issues": [
+      {
+        "type": "form_hallucination",
+        "detail": [
+          "application for registration of foreign company ([form 79 & 80"
+        ],
+        "confidence": 0.95,
+        "agent": "form_mapping"
+      }
+    ],
+    "root_agent": "form_mapping",
+    "reflection_note": "Auto-diagnosed: form_hallucination",
+    "timestamp": "2026-04-02T12:00:51.020165",
+    "rating": 1,
+    "correction_applied": false
   }
 ]

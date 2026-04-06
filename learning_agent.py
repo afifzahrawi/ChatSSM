@@ -74,7 +74,7 @@ _REFLECTION_MODEL = "qwen3:1.7b"   # fast, low-resource; intent only
 _REFLECTION_TIMEOUT = 20           # seconds
 MIN_POSITIVES_TO_LOCK = 2          # lock a form correction after N positive confirmations
 MAX_FAILURE_MEMORY    = 200        # keep only the most recent N failure records
-
+_REFLECTION_SEMAPHORE = threading.Semaphore(1)  # ensure only one reflection runs at a time to avoid overwhelming the LLM
 
 # =============================================================================
 # DATA CLASSES
@@ -344,6 +344,8 @@ def self_reflect(
     """
     Asks the small LLM to evaluate its own failure.
     Returns parsed reflection dict, or a safe default on any error.
+    Thread-safe: serialised via _REFLECTION_SEMAPHORE so concurrent
+    thumbs-down events never hit Ollama simultaneously.
     """
     form_context = ", ".join(f.get("name", "") for f in forms_shown) or "none"
     auto_summary = "; ".join(i["type"] for i in auto_issues) or "none detected automatically"
@@ -355,6 +357,14 @@ def self_reflect(
         f"Auto-detected issues: {auto_summary}\n\n"
         f"Valid intent taxonomy codes: {', '.join(_INTENT_TAXONOMY_KEYS)}"
     )
+
+    acquired = _REFLECTION_SEMAPHORE.acquire(timeout=_REFLECTION_TIMEOUT)
+    if not acquired:
+        logger.warning(
+            "SelfReflection: timed out waiting for semaphore "
+            "(another reflection is running) — using default."
+        )
+        return _default_reflection()
 
     try:
         resp = requests.post(
@@ -374,8 +384,16 @@ def self_reflect(
         if resp.status_code != 200:
             return _default_reflection()
         raw = resp.json().get("message", {}).get("content", "").strip()
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        raw = re.sub(r"<think>.*$",         "", raw, flags=re.DOTALL).strip()
+
+        # ── Strip think blocks — two-pass to avoid destroying JSON ───────────
+        raw = re.sub(
+            r"<(?:think|thinking|reasoning|reflection)>.*?</(?:think|thinking|reasoning|reflection)>",
+            "", raw, flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+        raw = re.sub(
+            r"<(?:think|thinking|reasoning|reflection)>.*$",
+            "", raw, flags=re.DOTALL | re.IGNORECASE
+        ).strip()
         raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
         # Extract the JSON object — ignore any preamble text the model added
@@ -384,9 +402,16 @@ def self_reflect(
         if start != -1 and end != -1 and end > start:
             raw = raw[start:end + 1]
 
+        if not raw:
+            logger.warning("SelfReflection: empty content after stripping — using default.")
+            return _default_reflection()
+
         data = _repair_and_parse_json(raw)
         if data is None:
-            logger.warning("SelfReflection: JSON repair failed, using default.")
+            logger.warning(
+                "SelfReflection: JSON repair failed — raw was: %s",
+                raw[:200],
+            )
             return _default_reflection()
 
         if data.get("root_agent") not in ("retrieval", "form_mapping", "generation", "unknown"):
@@ -401,7 +426,9 @@ def self_reflect(
     except Exception as exc:
         logger.warning("SelfReflection failed: %s", exc)
         return _default_reflection()
-
+    
+    finally:
+        _REFLECTION_SEMAPHORE.release()
 
 def _default_reflection() -> Dict:
     return {

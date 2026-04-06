@@ -134,7 +134,7 @@ class AppConfig:
     CACHE_DIR:       str = os.path.join("knowledge_base", "embeddings")
     FORMS_FILE:      str = os.path.join("knowledge_base", "forms.json")
     DATA_DIR:        str = "qa_data"
-    USER_DATA:       str = "user_data"
+    USER_DATA:       str = "chat_data"
 
     @classmethod
     def ensure_dirs(cls) -> None:
@@ -1572,8 +1572,8 @@ class ConversationMemory:
       - _compress_turn(): replace rule-based with LLM summarization
       - retrieve_long_term(): hook for MemoryIndex search (Phase 2)
     """
-    MAX_RAW_TURNS:    int = 4     # turns kept verbatim
-    MAX_HIST_TOKENS:  int = 250   # hard token budget for history block
+    MAX_RAW_TURNS:    int = 6     # turns kept verbatim
+    MAX_HIST_TOKENS:  int = 600   # hard token budget for history block
     REWRITE_THRESHOLD: int = 5    # queries shorter than this word count get rewritten
 
     _turns: List[Dict] = field(default_factory=list)
@@ -1584,9 +1584,17 @@ class ConversationMemory:
             "response": response,
             "summary":  self._compress_turn(query, response),
         })
-        # Keep only MAX_RAW_TURNS in working memory
+
         if len(self._turns) > self.MAX_RAW_TURNS:
-            self._turns.pop(0)
+            evicted = self._turns.pop(0)
+            try:
+                import streamlit as st
+                mem_mgr = st.session_state.get("mem_mgr")
+                if mem_mgr:
+                    topic = evicted["query"][:80]
+                    mem_mgr.add_session_summary([topic])
+            except Exception:
+                pass
 
     def rewrite_query(self, user_input: str, llm_service) -> str:
         """
@@ -1654,9 +1662,17 @@ class ConversationMemory:
             + "\n\n".join(lines)
             + "\n" + "─" * 40 + "\n\n"
         )
-        # Hard truncate if budget exceeded
-        if len(block) > self.MAX_HIST_TOKENS * 4:  # ~4 chars per token
-            block = block[:self.MAX_HIST_TOKENS * 4] + "\n[history truncated]\n\n"
+        # Budget check: if over limit, drop the oldest turn entirely (not mid-sentence)
+        while len(block) > self.MAX_HIST_TOKENS * 4 and len(lines) > 1:
+            lines.pop(0)   # remove oldest turn
+            block = (
+                "<<CONVERSATION HISTORY>>\n"
+                "Use ONLY to resolve references ('it', 'that', etc.).\n"
+                "Do NOT answer from history. Answer only from CONTEXT below.\n"
+                + "─" * 40 + "\n"
+                + "\n\n".join(lines)
+                + "\n" + "─" * 40 + "\n\n"
+            )
         return block
 
     @staticmethod
@@ -1673,16 +1689,16 @@ class ConversationMemory:
         deadlines = re.findall(r"\d+\s+(?:days?|months?|years?)", response)
 
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', response) if s.strip()]
-        first_sent = sentences[0][:150] if sentences else ""
+        first_two = " ".join(s[:120] for s in sentences[:2])
         last_sent  = sentences[-1][:150] if len(sentences) > 1 else "" 
-
         facts = sections[:3] + amounts[:2] + deadlines[:2]
-        summary = first_sent
+        summary = first_two
+
         if facts:
             summary += f" [{', '.join(facts)}]"
-        if last_sent and last_sent != first_sent: 
+        if last_sent and last_sent != first_two: 
             summary += f" | {last_sent}"  
-        return summary[:400] 
+        return summary[:600] 
 
 # =============================================================================
 # LLM SERVICE
@@ -1829,7 +1845,7 @@ FORMAT:
 
 COMPARISON QUESTIONS ("apa beza", "what is the difference", "compare"):
   1. First sentence states the core difference directly.
-  2. Explain each concept in 2–4 sentences.
+  2. Explain each concept in 2-4 sentences.
   3. Table or labelled paragraphs.
   4. One-sentence practical guidance at the end.
 
@@ -2202,37 +2218,193 @@ class CacheBuilder:
 _qa_log_lock = threading.Lock()
 
 class StorageService:
-    """Thin I/O layer: chat history (JSON) + Q&A log (CSV)."""
-    @staticmethod
-    def _history_file(uid: str) -> str:
-        return os.path.join(AppConfig.USER_DATA, f"chat_{uid[:16]}.json")
+    """
+    Thin I/O layer: multi-session chat history (JSON) + Q&A log (CSV).
+
+    Session model
+    -------------
+    Each chat session is a separate JSON file:
+        chat_data/session_<uid16>_<sid8>.json   ← message list
+    A session index tracks all sessions for a user:
+        chat_data/sessions_<uid16>.json          ← [{id, title, ts, count}]
+
+    Legacy single-file histories (chat_<uid>.json) are transparently
+    imported as the first session on first load.
+    """
+
+    # ── Internal path helpers ─────────────────────────────────────────────────
 
     @staticmethod
-    def load_history(uid: str) -> List[Dict]:
-        path = StorageService._history_file(uid)
+    def _session_file(uid: str, session_id: str) -> str:
+        return os.path.join(
+            AppConfig.USER_DATA,
+            f"session_{uid[:16]}_{session_id[:8]}.json",
+        )
+
+    @staticmethod
+    def _index_file(uid: str) -> str:
+        return os.path.join(AppConfig.USER_DATA, f"sessions_{uid[:16]}.json")
+
+    @staticmethod
+    def _legacy_file(uid: str) -> str:
+        """Path for the old single-file chat history format."""
+        return os.path.join(AppConfig.USER_DATA, f"chat_{uid[:16]}.json")
+
+    # ── Session index ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_index(uid: str) -> List[Dict]:
+        path = StorageService._index_file(uid)
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception as exc:
+            logger.error("Load sessions index failed: %s", exc)
+            return []
+
+    @staticmethod
+    def _save_index(uid: str, index: List[Dict]) -> None:
+        path = StorageService._index_file(uid)
+        tmp  = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(index, fh, indent=2, default=str, ensure_ascii=False)
+            shutil.move(tmp, path)
+        except Exception as exc:
+            logger.error("Save sessions index failed: %s", exc)
+
+    # ── Session CRUD ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def list_sessions(uid: str) -> List[Dict]:
+        """
+        Return all sessions for this user, newest first.
+        Also imports any legacy single-file history on first call.
+        """
+        StorageService._maybe_import_legacy(uid)
+        index = StorageService._load_index(uid)
+        return sorted(index, key=lambda s: s.get("ts", ""), reverse=True)
+
+    @staticmethod
+    def create_session(uid: str) -> str:
+        """Create a blank new session, register it, return its ID."""
+        session_id = uuid.uuid4().hex[:8]
+        index = StorageService._load_index(uid)
+        index.append({
+            "id":    session_id,
+            "title": "New Chat",
+            "ts":    datetime.now().isoformat(),
+            "count": 0,
+        })
+        StorageService._save_index(uid, index)
+        # Write an empty session file so it exists on disk
+        StorageService.save_session(uid, session_id, [])
+        return session_id
+
+    @staticmethod
+    def load_session(uid: str, session_id: str) -> List[Dict]:
+        path = StorageService._session_file(uid, session_id)
         try:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as fh:
                     return json.load(fh)
         except Exception as exc:
-            logger.error("Load history failed: %s", exc)
+            logger.error("Load session '%s' failed: %s", session_id, exc)
+        return []
+
+    @staticmethod
+    def save_session(uid: str, session_id: str, history: List[Dict]) -> None:
+        path    = StorageService._session_file(uid, session_id)
+        tmp     = path + ".tmp"
+        to_save = history[-200:]
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(to_save, fh, indent=2, default=str, ensure_ascii=False)
+            shutil.move(tmp, path)
+        except Exception as exc:
+            logger.error("Save session '%s' failed: %s", session_id, exc)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+        # Update index: title (first user question) + count
+        index = StorageService._load_index(uid)
+        title = "New Chat"
+        if to_save:
+            first_q = to_save[0].get("query", "")
+            title   = (first_q[:52] + "…") if len(first_q) > 52 else first_q or "New Chat"
+        for entry in index:
+            if entry.get("id") == session_id:
+                entry["title"] = title
+                entry["count"] = len(to_save)
+                entry["ts"]    = datetime.now().isoformat()
+                break
+        StorageService._save_index(uid, index)
+
+    @staticmethod
+    def delete_session(uid: str, session_id: str) -> None:
+        path = StorageService._session_file(uid, session_id)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+        index = [e for e in StorageService._load_index(uid)
+                 if e.get("id") != session_id]
+        StorageService._save_index(uid, index)
+
+    # ── Legacy import ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _maybe_import_legacy(uid: str) -> None:
+        """
+        One-time migration: if the old chat_<uid>.json exists and no sessions
+        index exists yet, import it as the first session.
+        """
+        if os.path.exists(StorageService._index_file(uid)):
+            return   # already migrated
+        legacy = StorageService._legacy_file(uid)
+        if not os.path.exists(legacy):
+            return
+        try:
+            with open(legacy, "r", encoding="utf-8") as fh:
+                old_history = json.load(fh)
+        except Exception:
+            return
+        if not old_history:
+            return
+
+        session_id = uuid.uuid4().hex[:8]
+        first_q    = old_history[0].get("query", "")
+        title      = (first_q[:52] + "…") if len(first_q) > 52 else first_q or "Imported Chat"
+        StorageService.save_session(uid, session_id, old_history)
+        # save_session writes the index entry too — re-read and fix title/ts
+        index = StorageService._load_index(uid)
+        if not any(e["id"] == session_id for e in index):
+            index.append({"id": session_id, "title": title,
+                           "ts": datetime.now().isoformat(), "count": len(old_history)})
+            StorageService._save_index(uid, index)
+        logger.info("Migrated legacy history → session '%s'.", session_id)
+
+    # ── Backwards-compat shims (used elsewhere in the file) ──────────────────
+
+    @staticmethod
+    def load_history(uid: str) -> List[Dict]:
+        """Shim: load the active session identified by session_state."""
+        sid = st.session_state.get("active_session_id")
+        if sid:
+            return StorageService.load_session(uid, sid)
         return []
 
     @staticmethod
     def save_history(history: List[Dict], uid: str) -> None:
-        path = StorageService._history_file(uid)
-        tmp_path = path + ".tmp"
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                history_to_save = history[-200:]
-                json.dump(history_to_save, fh, indent=2, default=str, ensure_ascii=False)
-            shutil.move(tmp_path, path)
-        except Exception as exc:
-            logger.error("Save history failed: %s", exc)
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        """Shim: save into the active session."""
+        sid = st.session_state.get("active_session_id")
+        if sid:
+            StorageService.save_session(uid, sid, history)
 
     @staticmethod
     def log_qa(
@@ -2271,15 +2443,17 @@ st.set_page_config(
     page_title="ChatSSM",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
 def _init_session() -> None:
     for key, val in {
-        "chat_history": [],
-        "cache_stats":  {"hits": 0, "misses": 0},
-        "conv_memory":   ConversationMemory(),
+        "chat_history":      [],
+        "cache_stats":       {"hits": 0, "misses": 0},
+        "conv_memory":       ConversationMemory(),
+        "active_session_id": None,
+        "sessions_loaded":   False,
     }.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -2484,6 +2658,7 @@ _CSS = """
 [data-testid="stSidebar"] {
     background: var(--dark);
     border-right: 1px solid #2e2e2e;
+    width: 300px !important;
 }
 [data-testid="stSidebar"] * {
     color: #ccc !important;
@@ -2534,10 +2709,10 @@ _CSS = """
 [data-testid="stChatInput"] textarea {
     width: 100% !important;
     box-sizing: border-box !important;
-    min-height: 54px;
+    min-height: 30px;
     max-height: 200px;
     font-size: 0.95rem;
-    padding: 14px 16px;
+    padding: 5px 1px;
     border-radius: 12px;
 }
 
@@ -2641,10 +2816,159 @@ button[data-testid="stChatInputSubmitButton"]:enabled:active {
 ._stCoreOverlay {
     display: none !important;
 }
-/* Optional: also hide the bottom-right "running" spinner */
-[data-testid="stStatusWidget"] {
-    display: none !important;
+/* ── Session row: chat name + 🗑 button ─────────────────────────────── */
+/*                                                                        */
+/* .ssm-sr is an empty marker injected before each row so :has(.ssm-sr)  */
+/* scopes every rule to session rows only.                                */
+
+/* 1. Marker div — collapse to zero height, no gap */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.ssm-sr) {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 0 !important;
 }
+[data-testid="stSidebar"] .ssm-sr {
+    display: block;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+/* 2. Row (stHorizontalBlock): remove all gaps, DO NOT use stretch —
+      vertical_alignment="center" on st.columns() already sets
+      align-items: center via Streamlit's own inline style.
+      align-items: stretch !important would override it and break centering. */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"] {
+    border-radius: 6px;
+    margin: 1px 0;
+    gap: 0 !important;
+    align-items: center !important;   /* belt-and-braces: matches vertical_alignment */
+}
+
+/* 3. Strip padding from both columns so they don't add phantom height */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"] {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* 4. Thread flex-center through every Streamlit wrapper div in the bin column.
+      Streamlit's DOM chain:  stColumn > stVerticalBlock > element-container > div.stButton > button
+      Each layer must pass align-items: center down to the next or the button
+      will drift to the top of whatever height the wrapper happens to have. */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child,
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child
+  > [data-testid="stVerticalBlock"],
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child
+  [data-testid="element-container"],
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  > [data-testid="stColumn"]:last-child
+  .stButton {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+}
+
+/* 5. Session name button — left-aligned, transparent */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  [data-testid="stColumn"]:first-child button {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    background: transparent !important;
+    border: none !important;
+    color: #ccc !important;
+    font-size: 0.83rem !important;
+    font-weight: 400 !important;
+    padding: 5px 10px !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    transition: background 0.12s, color 0.12s !important;
+}
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  [data-testid="stColumn"]:first-child button:hover:not(:disabled) {
+    background: rgba(255,255,255,0.07) !important;
+    color: #fff !important;
+}
+/* Active session — highlighted */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  [data-testid="stColumn"]:first-child button:disabled {
+    background: rgba(255,255,255,0.11) !important;
+    color: #fff !important;
+    opacity: 1 !important;
+    cursor: default !important;
+    font-weight: 500 !important;
+}
+
+/* 6. Bin button — hidden by default, revealed on row hover.
+      Size it explicitly so it has no inherited height that would
+      push it away from the flex-center we set above. */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  [data-testid="stColumn"]:last-child button {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    background: transparent !important;
+    border: none !important;
+    color: #aaa !important;
+    font-size: 0.95rem !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 26px !important;
+    height: 26px !important;
+    min-height: unset !important;
+    line-height: 26px !important;
+    box-shadow: none !important;
+    border-radius: 6px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+/* Reveal on row hover */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]:hover
+  [data-testid="stColumn"]:last-child button {
+    opacity: 1;
+}
+/* Bin hover highlight */
+[data-testid="stSidebar"]
+  [data-testid="stMarkdownContainer"]:has(.ssm-sr)
+  + [data-testid="stHorizontalBlock"]
+  [data-testid="stColumn"]:last-child button:hover {
+    opacity: 1 !important;
+    background: rgba(255,255,255,0.14) !important;
+    color: #fff !important;
+}
+
 </style>
 """
 
@@ -2652,142 +2976,126 @@ button[data-testid="stChatInputSubmitButton"]:enabled:active {
 # UI  -  SIDEBAR
 # =============================================================================
 
+@st.dialog("Delete chat?")
+def _confirm_delete_dialog(sid: str, uid: str) -> None:
+    """Floating modal confirmation for chat deletion."""
+    st.write("This chat will be permanently deleted and cannot be recovered.")
+    col_del, col_cancel = st.columns(2)
+    if col_del.button("Delete", type="primary", use_container_width=True):
+        store = _store()
+        store.delete_session(uid, sid)
+        active_sid = st.session_state.get("active_session_id")
+        if sid == active_sid:
+            remaining = store.list_sessions(uid)
+            if remaining:
+                nxt = remaining[0]
+                st.session_state["active_session_id"] = nxt["id"]
+                st.session_state["chat_history"]      = store.load_session(uid, nxt["id"])
+            else:
+                nid = store.create_session(uid)
+                st.session_state["active_session_id"] = nid
+                st.session_state["chat_history"]      = []
+            st.session_state["conv_memory"] = ConversationMemory()
+            st.session_state.pop("mem_mgr", None)
+        st.rerun()
+    if col_cancel.button("Cancel", use_container_width=True):
+        st.rerun()
 
 def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
     """
-    Render sidebar. Returns (ollama_ok, selected_source_keys, cat_filter).
-    cat_filter is None when "All categories" is ticked.
+    Lean sidebar: logo, New Chat, past sessions list, index management, links.
+    Returns (ollama_ok, selected_keys, cat_filter).
+    selected_keys = all ready sources (no per-source UI).
+    cat_filter    = None (all categories, no filter UI).
     """
     registry = _reg()
     kb       = _kb()
-    emb      = _emb()
     store    = _store()
-    uid = _get_persistent_user_id()
+    uid      = _get_persistent_user_id()
+
+    # ── Resolve active session on first page load ─────────────────────────────
+    if not st.session_state.get("active_session_id"):
+        sessions = store.list_sessions(uid)
+        if sessions:
+            # Resume the most-recent session
+            st.session_state["active_session_id"] = sessions[0]["id"]
+        else:
+            # First-ever visit — create a blank session
+            new_sid = store.create_session(uid)
+            st.session_state["active_session_id"] = new_sid
+
+    # ── Auto-select all ready sources (no UI picker) ─────────────────────────
+    idx_status = kb.index_status()
+    selected_keys = [
+        src.key
+        for src in registry.all_enabled()
+        if idx_status.get(src.key, "needs_preprocess") != "needs_preprocess"
+    ]
+
+    ollama_ok = _ollama_ok()
 
     with st.sidebar:
         st.markdown("## ⚖️ ChatSSM")
 
-        if st.button("➕ New Chat", use_container_width=True):
-            st.session_state["chat_history"] = []
-            store.save_history([], uid)
+        # ── New Chat button ───────────────────────────────────────────────────
+        if st.button("New Chat", use_container_width=True, type="primary"):
+            new_sid = store.create_session(uid)
+            st.session_state["active_session_id"] = new_sid
+            st.session_state["chat_history"]      = []
+            st.session_state["conv_memory"]       = ConversationMemory()
+            st.session_state.pop("mem_mgr", None)  # recreated in main()
             st.rerun()
 
         st.divider()
 
-        # ── System status ──────────────────────────────────────────────────
-        with st.expander("⚙️ Status", expanded=False):
-            ok = _ollama_ok()
-            st.markdown("✅ Ollama running" if ok else "❌ Ollama offline")
+        # ── Past sessions list ────────────────────────────────────────────────
+        sessions   = store.list_sessions(uid)
+        active_sid = st.session_state.get("active_session_id")
 
-            stats = st.session_state.get("cache_stats", {"hits": 0, "misses": 0})
-            c1, c2 = st.columns(2)
-            c1.metric("Cache Hits",   stats["hits"])
-            c2.metric("Cache Misses", stats["misses"])
+        if sessions:
+            st.markdown("**💬 Chats**")
+            for sess in sessions:
+                sid   = sess["id"]
+                title = sess.get("title") or "New Chat"
+                ts    = sess.get("ts", "")[:10]   # YYYY-MM-DD
 
-            counts = registry.stats()
-            total  = sum(counts.values())
-            st.markdown(f"**{total} enabled sources**")
-            for cat, n in counts.items():
-                icon = CATEGORY_ICONS.get(cat, "📁")
-                st.markdown(f"&nbsp;&nbsp;{icon} {cat}: **{n}**")
+                is_active   = sid == active_sid
 
-        st.divider()
+                # Marker div — CSS uses :has(.ssm-sr) on its parent
+                # (stMarkdownContainer) as an adjacent-sibling anchor to scope
+                # the ⋮ hover effect to this row only, not all sidebar rows.
+                label = title[:22] + ("…" if len(title) > 22 else "")
+                st.markdown('<div class="ssm-sr"></div>', unsafe_allow_html=True)
+                col_btn, col_menu = st.columns([11, 1], vertical_alignment="center")
 
-        # ── Feedback Analytics ─────────────────────────────────────────────
-        _sidebar_feedback_analytics()
+                with col_btn:
+                    if st.button(label, key=f"sess_{sid}",
+                                use_container_width=True,
+                                help=title, disabled=is_active):
+                        st.session_state["active_session_id"] = sid
+                        st.session_state["chat_history"]      = store.load_session(uid, sid)
+                        st.session_state["conv_memory"]       = ConversationMemory()
+                        for msg in st.session_state["chat_history"][-ConversationMemory.MAX_RAW_TURNS:]:
+                            st.session_state["conv_memory"]._turns.append({
+                                "query":    msg.get("query", ""),
+                                "response": msg.get("response", ""),
+                                "summary":  ConversationMemory._compress_turn(
+                                                msg.get("query", ""),
+                                                msg.get("response", ""),
+                                            ),
+                            })
+                        st.session_state.pop("mem_mgr", None)
+                        st.rerun()
 
-        st.divider()
-
-        # ── Category filter ────────────────────────────────────────────────
-        st.markdown("**🗂️ Category Filter**")
-        all_cats  = st.checkbox("All categories", value=True, key="cat_all")
-        cat_filter: Optional[List[str]] = None
-
-        if not all_cats:
-            chosen: List[str] = []
-            for cat in CATEGORIES:
-                srcs = registry.by_category().get(cat, [])
-                if not srcs:
-                    continue
-                icon = CATEGORY_ICONS.get(cat, "📁")
-                if st.checkbox(
-                    f"{icon} {cat} ({len(srcs)})", value=True, key=f"catf_{cat}"
-                ):
-                    chosen.append(cat)
-            cat_filter = chosen if chosen else None
-
-        st.divider()
-
-        # ── Source selection by category ───────────────────────────────────
-        st.markdown("**📚 Knowledge Sources**")
-        idx_status     = kb.index_status()
-        selected_keys: List[str] = []
-        unprocessed:   List[str] = []
-
-        status_icons = {
-            "ready":            ("🟢", "Index in memory"),
-            "cached":           ("🟡", "Index cached on disk"),
-            "not_indexed":      ("🔵", "Processed, not yet indexed (will index on first query)"),
-            "needs_preprocess": ("🔴", "Run: python preprocess.py --key <key>"),
-        }
-
-        for cat in CATEGORIES:
-            srcs = registry.by_category().get(cat, [])
-            if not srcs:
-                continue
-            if cat_filter and cat not in cat_filter:
-                continue
-
-            icon     = CATEGORY_ICONS.get(cat, "📁")
-
-            with st.expander(f"{icon} {cat}  ({len(srcs)})", expanded=False):
-                all_in = st.checkbox("Select all", value=True, key=f"selall_{cat}")
-
-                for src in srcs:
-                    s_icon, s_tip = status_icons.get(
-                        idx_status.get(src.key, "needs_preprocess"), ("❓", ""),
-                    )
-
-                    _TYPE_TAG = {"pdf": "PDF", "csv": "CSV", "image": "IMG", "pptx": "PPT"}
-                    tag = _TYPE_TAG.get(src.type, src.type.upper())
-
-                    if idx_status.get(src.key) == "needs_preprocess":
-                        unprocessed.append(src.key)
-
-                    col_chk, col_type, col_dot = st.columns([6, 1, 1])
-                    with col_chk:
-                        checked = st.checkbox(
-                            src.name,
-                            value=(all_in and idx_status.get(src.key) != "needs_preprocess"),
-                            key=f"src_{src.key}",
-                            help=f"{s_icon} {s_tip}  |  Type: {tag}",
-                            disabled=(idx_status.get(src.key) == "needs_preprocess"),
-                        )
-                    with col_type:
-                        st.caption(tag)
-                    with col_dot:
-                        st.caption(s_icon)
-
-                    if checked and idx_status.get(src.key) != "needs_preprocess":
-                        selected_keys.append(src.key)
-
-        # ── Preprocess warnings ────────────────────────────────────────────
-        if unprocessed:
-            st.divider()
-            st.markdown("**⚠️ Sources needing preprocessing:**")
-            for k in unprocessed:
-                st.markdown(
-                    f'<div class="preprocess-warn">'
-                    f'🔴 <code>{k}</code><br>'
-                    f'<code>python preprocess.py --key {k}</code>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                with col_menu:
+                    if st.button("🗑️", key=f"menu_{sid}", help="Delete chat"):
+                        _confirm_delete_dialog(sid, uid)
 
         st.divider()
 
-        # ── Index management ───────────────────────────────────────────────
+        # ── Index management (admin) ──────────────────────────────────────────
         with st.expander("🔧 Manage Indexes", expanded=False):
+            emb = _emb()
             st.caption(
                 "🟢 in memory  🟡 disk cache  🔵 will index on first query  🔴 needs preprocessing"
             )
@@ -2820,82 +3128,19 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
                     kb.rebuild_all()
                 st.success("All cleared. Indexes rebuild on next query.")
 
-        # ── External links ─────────────────────────────────────────────────
+        # ── External links ────────────────────────────────────────────────────
         c1, c2 = st.columns(2)
-        c1.link_button("SSM Portal", "https://www.ssm.com.my",   use_container_width=True)
-        c2.link_button("MyCoID",     "https://www.mycoid.com.my", use_container_width=True)
-
-        # ── Recent questions ───────────────────────────────────────────────
-        recent = st.session_state.get("chat_history", [])[-8:]
-        if recent:
-            st.divider()
-            st.markdown("**🕐 Recent**")
-            for i, item in enumerate(reversed(recent)):
-                label = item["query"][:38] + ("…" if len(item["query"]) > 38 else "")
-                if st.button(label, key=f"hist_{i}", use_container_width=True):
-                    st.session_state["prefill"] = item["query"]
-                    st.rerun()
+        c1.link_button("SSM Portal", "https://www.ssm.com.my",    use_container_width=True)
+        c2.link_button("MyCoID",     "https://www.mycoid.com.my",  use_container_width=True)
 
         st.caption("⚠️ Always consult a licensed professional for legal matters.")
 
-    return ok, selected_keys, cat_filter
+    return ollama_ok, selected_keys, None
 
 
 def _sidebar_feedback_analytics() -> None:
-    """Analytics panel showing feedback stats and active prompt patches."""
-    fb_store  = _feedback_store()
-    optimizer = _optimizer()
-    summary   = fb_store.summary()
-
-    with st.expander("📊 Feedback Analytics", expanded=False):
-        t = summary["total"]
-        if t == 0:
-            st.caption("No feedback collected yet.")
-        else:
-            # Rating summary
-            col1, col2, col3 = st.columns(3)
-            col1.metric("👍 Helpful",   summary["positive"])
-            col2.metric("😐 Okay",      summary["neutral"])
-            col3.metric("👎 Negative",  summary["negative"])
-
-            # Satisfaction rate
-            if t > 0:
-                rate = round((summary["positive"] / t) * 100)
-                st.progress(rate / 100, f"Satisfaction: {rate}%")
-
-            # Failure breakdown
-            neg = summary["negative"]
-            if neg > 0:
-                st.markdown("**Failure breakdown** (negative responses):")
-                fc = summary["failure_counts"]
-                for key, label in FeedbackStore.FAILURE_TYPES.items():
-                    count = fc.get(key, 0)
-                    if count > 0:
-                        pct = int(count / neg * 100)
-                        st.markdown(f"  {label}: **{count}** ({pct}%)")
-
-        # Active prompt patches
-        patches = optimizer.active_patch_names()
-        if patches:
-            st.markdown("**🔧 Active prompt patches:**")
-            for p in patches:
-                st.markdown(
-                    f'<span class="patch-badge">⚡ {p}</span>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("No prompt patches active.")
-
-        # Download feedback log
-        if summary["total"] > 0:
-            fb_json = json.dumps(summary["records"], indent=2, ensure_ascii=False)
-            st.download_button(
-                "📥 Export feedback log",
-                data=fb_json,
-                file_name=f"chatssm_feedback_{datetime.now().strftime('%Y%m%d')}.json",
-                mime="application/json",
-                use_container_width=True,
-            )
+    """Kept as no-op — analytics moved to separate dashboard."""
+    pass
 
 
 # =============================================================================
@@ -3256,8 +3501,25 @@ def main() -> None:
             session_id        = _get_persistent_user_id(),
         )
 
-    if not st.session_state["chat_history"]:
-        st.session_state["chat_history"] = _store().load_history(uid)
+    # ── Load the active session's messages on first render ───────────────────
+    # The sidebar already resolved active_session_id; here we hydrate
+    # chat_history if it is still empty (first page-render after session switch
+    # or initial load).
+    sid = st.session_state.get("active_session_id")
+    if sid and not st.session_state["chat_history"]:
+        loaded = StorageService.load_session(uid, sid)
+        if loaded:
+            st.session_state["chat_history"] = loaded
+            if not st.session_state["conv_memory"]._turns:
+                for msg in loaded[-ConversationMemory.MAX_RAW_TURNS:]:
+                    st.session_state["conv_memory"]._turns.append({
+                        "query":    msg.get("query", ""),
+                        "response": msg.get("response", ""),
+                        "summary":  ConversationMemory._compress_turn(
+                                        msg.get("query", ""),
+                                        msg.get("response", ""),
+                                    ),
+                    })
 
     _render_messages()
 
@@ -3302,8 +3564,8 @@ def main() -> None:
     if user_input and user_input.strip():
         if not selected_keys:
             st.warning(
-                "No active knowledge sources. "
-                "Select at least one source in the sidebar."
+                "⚠️ No knowledge sources are ready yet. "
+                "Run `python preprocess.py` to index documents, then refresh."
             )
             st.stop()
 
