@@ -57,6 +57,8 @@ import csv
 from memory_manager import MemoryManager
 from intent_form_agent import IntentFormAgent
 from learning_agent import LearningAgent
+from auth import render_auth_wall, logout
+from db_storage import DBStorageService
 
 # =============================================================================
 # LOGGING
@@ -2501,8 +2503,8 @@ def _llm() -> LLMService:
 
 
 @st.cache_resource
-def _store() -> StorageService:
-    return StorageService()
+def _store():
+    return DBStorageService()
 
 
 @st.cache_resource
@@ -2552,23 +2554,8 @@ def _make_qa_id(query: str, timestamp: str) -> str:
     return hashlib.md5(f"{query}{timestamp}".encode()).hexdigest()[:12]
 
 def _get_persistent_user_id() -> str:
-    """
-    Returns a stable user ID that survives browser restarts.
-    On first visit: generates a UUID and writes it to the URL.
-    On return visits: reads it back from the URL.
-    Users who bookmark their URL keep their preferences permanently.
-    """
-    params = st.query_params
-    if "uid" in params:
-        uid = params["uid"]
-        # Validate it looks like a UUID (security: reject injected values)
-        if re.match(r'^[a-f0-9\-]{32,36}$', uid):
-            return uid
-
-    # First visit — generate and write to URL
-    new_uid = str(uuid.uuid4())
-    st.query_params["uid"] = new_uid
-    return new_uid
+    """Returns the authenticated user's Supabase ID."""
+    return st.session_state.get("_auth_user_id", "")
 
 # =============================================================================
 # CSS
@@ -3561,6 +3548,16 @@ def _render_inline_feedback(msg: Dict, qa_id: str) -> None:
 
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+
+    # ── Auth gate — nothing renders until user is logged in ───────────────────
+    uid = render_auth_wall()
+    if not uid:
+        st.stop()   # don't render any other UI
+
+    # ── Log out button in sidebar ─────────────────────────────────────────────
+    with st.sidebar:
+        if st.button("Log out", key="logout_btn"):
+            logout()
 
     # Measure actual sidebar width and write it as --ssm-sidebar-w so the
     # landing-page input centering rule stays accurate when the sidebar is
