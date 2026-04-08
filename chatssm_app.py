@@ -54,7 +54,6 @@ import html
 import tempfile, shutil
 import csv
 
-from chunk import Chunk, SearchResult
 from memory_manager import MemoryManager
 from intent_form_agent import IntentFormAgent
 from learning_agent import LearningAgent
@@ -154,7 +153,23 @@ _EMBEDDING_CACHE   = os.path.join(AppConfig.CACHE_DIR, "embedding_cache.pkl")
 # =============================================================================
 # DATA CLASSES
 # =============================================================================
+@dataclass
+class Chunk:
+    text:               str
+    source_key:         str
+    source_name:        str
+    category:           str
+    section:            str                     = ""
+    part:               str                     = ""
+    embedding:          Optional[np.ndarray]    = field(default=None, compare=False, repr=False)
+    relates_to_acts:    List[str]               = field(default_factory=list)  # e.g., ["Companies Act 2016", "LLP Act 2012"]
+    language:           str                     = "en"
+    chunk_type:         str                     = "text"
 
+@dataclass
+class SearchResult:
+    chunk: Chunk
+    score: float
 
 @dataclass
 class SourceEntry:
@@ -2457,6 +2472,7 @@ def _init_session() -> None:
     }.items():
         if key not in st.session_state:
             st.session_state[key] = val
+            st.session_state.pop("_chat_started", None)
 
 
 _init_session()
@@ -2575,7 +2591,7 @@ _CSS = """
 }
 
 .block-container {
-    padding: 18px 36px;
+    padding: 60px 36px 18px;
     max-width: 960px;
     margin: 0 auto;
 }
@@ -2637,23 +2653,113 @@ _CSS = """
     margin: 2px 2px 0 0;
 }
 
-.welcome {
+/* ── Landing page — ChatGPT/Chainlit style ────────────────────────── */
+.ssm-landing {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 40vh;
     text-align: center;
-    padding: 52px 20px;
-    color: var(--muted);
+    padding: 40px 20px 20px;   /* bottom padding reserves space for stBottom */
+    animation: ssmFadeIn 0.35s ease;
 }
-.welcome h2 {
-    color: #444;
-    font-size: 1.5rem;
-    margin-bottom: 10px;
+
+@keyframes ssmFadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0);    }
 }
-.welcome .eg {
-    font-size: 0.87rem;
+
+.ssm-landing .ssm-logo {
+    font-size: 2.6rem;
+    font-weight: 700;
+    color: #f0f0f0;
+    margin: 0 0 10px;
+    letter-spacing: -0.5px;
+}
+
+.ssm-landing .ssm-tagline {
+    font-size: 1rem;
     color: #888;
-    margin-top: 14px;
-    font-style: italic;
-    line-height: 1.8;
+    margin: 0 0 20px;
+    line-height: 1.65;
+    max-width: 500px;
 }
+
+.ssm-landing .ssm-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    justify-content: center;
+    max-width: 620px;
+}
+
+/* Chip buttons — Streamlit buttons styled as pill chips */
+.ssm-landing [data-testid="stBaseButton-secondary"] button,
+.ssm-landing .stButton > button {
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    border-radius: 999px !important;
+    margin: 0 auto !important;
+    display: block !important;
+    padding: 7px 16px !important;
+    font-size: 0.83rem !important;
+    color: #bbb !important;
+    line-height: 1.4 !important;
+    height: auto !important;
+    min-height: unset !important;
+    box-shadow: none !important;
+    transition: background 0.15s, border-color 0.15s, color 0.15s !important;
+    white-space: nowrap !important;
+}
+.ssm-landing [data-testid="stBaseButton-secondary"] button:hover,
+.ssm-landing .stButton > button:hover {
+    background: rgba(255,255,255,0.10) !important;
+    border-color: rgba(255,255,255,0.28) !important;
+    color: #eee !important;
+}
+
+/* Hide the compact chat-mode header on landing */
+body:has(.ssm-landing) .ssm-chat-hdr {
+    display: none !important;
+}
+
+/* Hide the original header on landing */
+body:has(.ssm-landing) .hdr {
+    display: none !important;
+}
+
+/* ── Compact in-chat header (replaces .hdr after first message) ──── */
+.ssm-chat-hdr {
+    position: fixed;
+    top: 3.125rem;
+    left: 0;
+    right: 0;
+    z-index: 999;
+    background: #0e1117;  
+    text-align: center;
+    padding: 10px 0 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.ssm-chat-hdr h2 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #ddd;
+    margin: 0;
+    letter-spacing: 0.01em;
+}
+.ssm-chat-hdr ~ * .block-container,
+.block-container {
+    padding-top: 90px !important;  /* 50px toolbar + ~40px your header */
+}
+
+/* ── Chat message fade-in ─────────────────────────────────────────── */
+.stChatMessage {
+    animation: ssmFadeIn 0.25s ease;
+}
+
+/* Keep old .welcome class as no-op so any stray references don't break */
+.welcome { display: none; }
 
 [data-testid="stSidebar"] {
     background: var(--dark);
@@ -2709,7 +2815,7 @@ _CSS = """
 [data-testid="stChatInput"] textarea {
     width: 100% !important;
     box-sizing: border-box !important;
-    min-height: 30px;
+    min-height: 20px;
     max-height: 200px;
     font-size: 0.95rem;
     padding: 5px 1px;
@@ -2761,7 +2867,12 @@ button[data-testid="stChatInputSubmitButton"]:enabled:active {
 .fb-hr {
     border: none;
     border-top: 1px solid rgba(0,0,0,0.07);
-    margin: 10px 0 4px 0;
+    margin: -10px 0 2px 0;
+}
+[data-testid="stChatMessageContent"]
+  [data-testid="stMarkdownContainer"] + div {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
 
 /* Icon buttons — strip Streamlit default styling inside chat messages */
@@ -2816,6 +2927,13 @@ button[data-testid="stChatInputSubmitButton"]:enabled:active {
 ._stCoreOverlay {
     display: none !important;
 }
+
+/* JS sets --ssm-sidebar-w on :root; fallback = 300px */
+:root { --ssm-sidebar-w: 300px; }
+
+/* On landing: stBottom stays at its natural bottom position (no override needed).
+   The landing div's padding-bottom: 160px reserves the space so chips don't
+   overlap the input. The block-container max-width already centers the input. */
 /* ── Session row: chat name + 🗑 button ─────────────────────────────── */
 /*                                                                        */
 /* .ssm-sr is an empty marker injected before each row so :has(.ssm-sr)  */
@@ -2995,6 +3113,7 @@ def _confirm_delete_dialog(sid: str, uid: str) -> None:
                 nid = store.create_session(uid)
                 st.session_state["active_session_id"] = nid
                 st.session_state["chat_history"]      = []
+                st.session_state.pop("_chat_started", None)
             st.session_state["conv_memory"] = ConversationMemory()
             st.session_state.pop("mem_mgr", None)
         st.rerun()
@@ -3042,6 +3161,7 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
             new_sid = store.create_session(uid)
             st.session_state["active_session_id"] = new_sid
             st.session_state["chat_history"]      = []
+            st.session_state.pop("_chat_started", None)
             st.session_state["conv_memory"]       = ConversationMemory()
             st.session_state.pop("mem_mgr", None)  # recreated in main()
             st.rerun()
@@ -3070,8 +3190,8 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
 
                 with col_btn:
                     if st.button(label, key=f"sess_{sid}",
-                                use_container_width=True,
-                                help=title, disabled=is_active):
+                            use_container_width=True,
+                            help=title, disabled=is_active):
                         st.session_state["active_session_id"] = sid
                         st.session_state["chat_history"]      = store.load_session(uid, sid)
                         st.session_state["conv_memory"]       = ConversationMemory()
@@ -3149,16 +3269,15 @@ def _sidebar_feedback_analytics() -> None:
 
 
 def _header() -> None:
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
+    history = st.session_state.get("chat_history", [])
+    chat_started = st.session_state.get("_chat_started", False)
+    if history or chat_started:
+        # Compact in-chat header — shown once messages exist
         st.markdown(
-            '<div class="hdr">'
-            "<h1>⚖️ ChatSSM</h1>"
-            "<p>Precise answers from SSM's official legislation, "
-            "practice notes, guidelines, circulars, and more.</p>"
-            "</div>",
+            '<div class="ssm-chat-hdr"><h2>⚖️ ChatSSM</h2></div>',
             unsafe_allow_html=True,
         )
+    # Landing page shows its own logo inside .ssm-landing — no header needed
 
 def _build_section_freq(chunks: List[str]) -> Dict[tuple, int]:
     """
@@ -3246,15 +3365,38 @@ def _inject_form_links(text: str, forms: List[FormEntry], lang: str = "en") -> s
 
 def _render_messages() -> None:
     history = st.session_state.get("chat_history", [])
-    if not history:
+    chat_started = st.session_state.get("_chat_started", False)
+    if not history and not chat_started:
+        # ── Landing page — centered logo + clickable example prompts ──────
         st.markdown(
-            '<div class="welcome">'
-            "<h2>Welcome to ChatSSM</h2>"
-            "<p>Ask any question about Malaysian company and business law.</p>"
-            '<div class="eg">'
-            "</div></div>",
+            """
+            <div class="ssm-landing">
+              <div class="ssm-logo">⚖️ ChatSSM</div>
+              <div class="ssm-tagline">
+                Your AI-powered legal assistant for Malaysian company and business law.<br>
+                Ask anything about the Companies Act 2016, LLP Act, SSM procedures, forms, and more.
+              </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
+
+        # Render chips as real Streamlit buttons so clicks are handled
+        _CHIPS = [
+            "What is the deadline to lodge an annual return?",
+            "How do I appoint a new director?",
+            "What forms are needed to strike off a company?",
+            "Cara menukar alamat syarikat berdaftar?",
+            "What is the audit exemption threshold?",
+            "How to convert a public company to private?",
+        ]
+        chip_cols = st.columns(len(_CHIPS))
+        for idx, chip in enumerate(_CHIPS):
+            with chip_cols[idx % len(_CHIPS)]:
+                if st.button(chip, key=f"chip_{idx}", use_container_width=False):
+                    st.session_state["prefill"]        = chip
+                    st.session_state["_chat_started"]  = True
+                    st.rerun()
         return
 
     for msg in history:
@@ -3278,12 +3420,6 @@ def _render_messages() -> None:
                     for f in msg["forms"]
                 ]
 
-            cats = msg.get("categories_hit", [])
-            if cats:
-                badge_html = " ".join(
-                    f'<span class="badge">{html.escape(c)}</span>' for c in cats
-                )
-                st.markdown(badge_html, unsafe_allow_html=True)
             _render_inline_feedback(msg, qa_id)
 
 
@@ -3426,6 +3562,32 @@ def _render_inline_feedback(msg: Dict, qa_id: str) -> None:
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
+    # Measure actual sidebar width and write it as --ssm-sidebar-w so the
+    # landing-page input centering rule stays accurate when the sidebar is
+    # collapsed or resized.
+    st.markdown(
+        """
+        <script>
+        (function _ssmSidebarWidth() {
+            function measure() {
+                const sb = document.querySelector('[data-testid="stSidebar"]');
+                const w  = sb ? sb.getBoundingClientRect().width : 0;
+                document.documentElement.style.setProperty(
+                    '--ssm-sidebar-w', w + 'px'
+                );
+            }
+            measure();
+            // Re-measure on sidebar toggle
+            const obs = new ResizeObserver(measure);
+            const sb  = document.querySelector('[data-testid="stSidebar"]');
+            if (sb) obs.observe(sb);
+            window.addEventListener('resize', measure);
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # ── Check if indexes need building BEFORE rendering any UI ────────────────
     kb  = _kb()
     reg = _reg()
@@ -3527,7 +3689,6 @@ def main() -> None:
     just_submitted = st.session_state.pop("just_submitted", False)
 
     if just_submitted:
-        # Post-submit: scroll immediately and keep following streaming content
         st.markdown(
             """
             <script>
@@ -3552,6 +3713,11 @@ def main() -> None:
         max_chars=2000,
     ) or prefill_val
 
+    # Recover input from the layout-switch rerun (chat_input returns None
+    # on the rerun that follows st.rerun(), so we restore from session_state)
+    if not user_input:
+        user_input = st.session_state.pop("_pending_input", "") or ""
+
     if st.session_state.pop("force_show_forms", False) and user_input:
         st.session_state["pending_form_query"] = user_input
 
@@ -3562,6 +3728,15 @@ def main() -> None:
         user_input = pending_q   # re-run with original query, forms will now show
 
     if user_input and user_input.strip():
+        # ── Immediately switch to chat layout before any processing ──────────
+        # _render_messages() and _header() already ran this frame with the
+        # old state (landing).  Set the flag and rerun so the NEXT render
+        # shows the compact chat header — input is preserved in _pending_input.
+        if not st.session_state.get("_chat_started"):
+            st.session_state["_chat_started"]  = True
+            st.session_state["_pending_input"] = user_input
+            st.rerun()
+
         if not selected_keys:
             st.warning(
                 "⚠️ No knowledge sources are ready yet. "
