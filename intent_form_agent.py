@@ -272,6 +272,7 @@ class IntentFormAgent:
         conversation_history: List[Dict],
         lang: str = "en",
         detected_act: Optional[str] = None,
+        uid: Optional[str] = None,
     ) -> FormResolutionResult:
         """
         Main entry point. Returns FormResolutionResult.
@@ -284,7 +285,7 @@ class IntentFormAgent:
         """
 
         # Cache hit (same query in same session)
-        cache_key = hashlib.md5(f"{query[:100]}_{lang}".encode()).hexdigest()
+        cache_key = hashlib.md5(f"{uid}:{query[:100]}_{lang}".encode()).hexdigest()
         if cache_key in _INTENT_CACHE and cache_key not in _NEGATIVELY_RATED:
             logger.debug("IntentFormAgent: cache hit for query.")
             return _INTENT_CACHE[cache_key]

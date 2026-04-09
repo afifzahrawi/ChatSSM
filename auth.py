@@ -9,13 +9,23 @@ import os
 import streamlit as st
 from supabase import create_client, Client
 
-_SUPABASE_URL = os.environ["SUPABASE_URL"]
-_SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
-
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+if not _SUPABASE_URL or not _SUPABASE_KEY:
+    raise EnvironmentError(
+        "SUPABASE_URL and SUPABASE_ANON_KEY must be set as environment variables."
+    )
 
 @st.cache_resource
 def _supabase() -> Client:
     return create_client(_SUPABASE_URL, _SUPABASE_KEY)
+
+@st.cache_resource
+def _supabase_admin() -> Client:
+    return create_client(
+        os.environ["SUPABASE_URL"],
+        os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    )
 
 
 def render_auth_wall() -> str | None:
@@ -72,6 +82,11 @@ def render_auth_wall() -> str | None:
             email    = st.text_input("Email",            key="signup_email",    placeholder="you@example.com")
             password = st.text_input("Password",         key="signup_password", type="password", placeholder="Min 8 characters")
             confirm  = st.text_input("Confirm password", key="signup_confirm",  type="password")
+
+            if st.session_state.get("_signup_success"):
+                st.success("✅ Account created! You can now log in.")
+                st.session_state.pop("_signup_success", None)
+
             if st.button("Create account", use_container_width=True, type="primary"):
                 if not email or not password:
                     st.error("Please fill in all fields.")
@@ -83,11 +98,16 @@ def render_auth_wall() -> str | None:
                     try:
                         res = _supabase().auth.sign_up({"email": email, "password": password})
                         if res.user:
-                            st.success("Account created! Check your email to confirm, then log in.")
+                            st.session_state["_signup_success"] = True
+                            st.rerun()
                         else:
                             st.error("Sign-up failed — please try again.")
                     except Exception as exc:
-                        st.error(f"Sign-up failed: {exc}")
+                        msg = str(exc)
+                        if "already registered" in msg.lower() or "already exists" in msg.lower():
+                            st.error("This email is already registered. Please log in instead.")
+                        else:
+                            st.error(f"Sign-up failed: {msg}")
 
     return None  # not authenticated yet
 

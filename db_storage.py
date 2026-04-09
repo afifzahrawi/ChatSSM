@@ -136,7 +136,9 @@ class DBStorageService:
                 })
 
             if new_rows:
-                _supabase().table("messages").insert(new_rows).execute()
+                _supabase().table("messages").upsert(
+                    new_rows, on_conflict="qa_id,session_id"
+                ).execute()
 
             # Update session title from first message
             if history:
@@ -155,7 +157,8 @@ class DBStorageService:
     @staticmethod
     def delete_session(uid: str, session_id: str) -> None:
         try:
-            _supabase().table("chat_sessions").delete().eq("id", session_id).execute()
+            _supabase().table("chat_sessions").delete()\
+                .eq("id", session_id).eq("user_id", uid).execute()
         except Exception as exc:
             logger.error("delete_session failed: %s", exc)
 

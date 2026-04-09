@@ -2228,228 +2228,7 @@ class CacheBuilder:
         except Exception:
             pass 
 
-# =============================================================================
-# STORAGE SERVICE
-# =============================================================================
 
-_qa_log_lock = threading.Lock()
-
-class StorageService:
-    """
-    Thin I/O layer: multi-session chat history (JSON) + Q&A log (CSV).
-
-    Session model
-    -------------
-    Each chat session is a separate JSON file:
-        chat_data/session_<uid16>_<sid8>.json   ← message list
-    A session index tracks all sessions for a user:
-        chat_data/sessions_<uid16>.json          ← [{id, title, ts, count}]
-
-    Legacy single-file histories (chat_<uid>.json) are transparently
-    imported as the first session on first load.
-    """
-
-    # ── Internal path helpers ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _session_file(uid: str, session_id: str) -> str:
-        return os.path.join(
-            AppConfig.USER_DATA,
-            f"session_{uid[:16]}_{session_id[:8]}.json",
-        )
-
-    @staticmethod
-    def _index_file(uid: str) -> str:
-        return os.path.join(AppConfig.USER_DATA, f"sessions_{uid[:16]}.json")
-
-    @staticmethod
-    def _legacy_file(uid: str) -> str:
-        """Path for the old single-file chat history format."""
-        return os.path.join(AppConfig.USER_DATA, f"chat_{uid[:16]}.json")
-
-    # ── Session index ─────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _load_index(uid: str) -> List[Dict]:
-        path = StorageService._index_file(uid)
-        if not os.path.exists(path):
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        except Exception as exc:
-            logger.error("Load sessions index failed: %s", exc)
-            return []
-
-    @staticmethod
-    def _save_index(uid: str, index: List[Dict]) -> None:
-        path = StorageService._index_file(uid)
-        tmp  = path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(index, fh, indent=2, default=str, ensure_ascii=False)
-            shutil.move(tmp, path)
-        except Exception as exc:
-            logger.error("Save sessions index failed: %s", exc)
-
-    # ── Session CRUD ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    def list_sessions(uid: str) -> List[Dict]:
-        """
-        Return all sessions for this user, newest first.
-        Also imports any legacy single-file history on first call.
-        """
-        StorageService._maybe_import_legacy(uid)
-        index = StorageService._load_index(uid)
-        return sorted(index, key=lambda s: s.get("ts", ""), reverse=True)
-
-    @staticmethod
-    def create_session(uid: str) -> str:
-        """Create a blank new session, register it, return its ID."""
-        session_id = uuid.uuid4().hex[:8]
-        index = StorageService._load_index(uid)
-        index.append({
-            "id":    session_id,
-            "title": "New Chat",
-            "ts":    datetime.now().isoformat(),
-            "count": 0,
-        })
-        StorageService._save_index(uid, index)
-        # Write an empty session file so it exists on disk
-        StorageService.save_session(uid, session_id, [])
-        return session_id
-
-    @staticmethod
-    def load_session(uid: str, session_id: str) -> List[Dict]:
-        path = StorageService._session_file(uid, session_id)
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as fh:
-                    return json.load(fh)
-        except Exception as exc:
-            logger.error("Load session '%s' failed: %s", session_id, exc)
-        return []
-
-    @staticmethod
-    def save_session(uid: str, session_id: str, history: List[Dict]) -> None:
-        path    = StorageService._session_file(uid, session_id)
-        tmp     = path + ".tmp"
-        to_save = history[-200:]
-        try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(to_save, fh, indent=2, default=str, ensure_ascii=False)
-            shutil.move(tmp, path)
-        except Exception as exc:
-            logger.error("Save session '%s' failed: %s", session_id, exc)
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-
-        # Update index: title (first user question) + count
-        index = StorageService._load_index(uid)
-        title = "New Chat"
-        if to_save:
-            first_q = to_save[0].get("query", "")
-            title   = (first_q[:52] + "…") if len(first_q) > 52 else first_q or "New Chat"
-        for entry in index:
-            if entry.get("id") == session_id:
-                entry["title"] = title
-                entry["count"] = len(to_save)
-                entry["ts"]    = datetime.now().isoformat()
-                break
-        StorageService._save_index(uid, index)
-
-    @staticmethod
-    def delete_session(uid: str, session_id: str) -> None:
-        path = StorageService._session_file(uid, session_id)
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        index = [e for e in StorageService._load_index(uid)
-                 if e.get("id") != session_id]
-        StorageService._save_index(uid, index)
-
-    # ── Legacy import ─────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _maybe_import_legacy(uid: str) -> None:
-        """
-        One-time migration: if the old chat_<uid>.json exists and no sessions
-        index exists yet, import it as the first session.
-        """
-        if os.path.exists(StorageService._index_file(uid)):
-            return   # already migrated
-        legacy = StorageService._legacy_file(uid)
-        if not os.path.exists(legacy):
-            return
-        try:
-            with open(legacy, "r", encoding="utf-8") as fh:
-                old_history = json.load(fh)
-        except Exception:
-            return
-        if not old_history:
-            return
-
-        session_id = uuid.uuid4().hex[:8]
-        first_q    = old_history[0].get("query", "")
-        title      = (first_q[:52] + "…") if len(first_q) > 52 else first_q or "Imported Chat"
-        StorageService.save_session(uid, session_id, old_history)
-        # save_session writes the index entry too — re-read and fix title/ts
-        index = StorageService._load_index(uid)
-        if not any(e["id"] == session_id for e in index):
-            index.append({"id": session_id, "title": title,
-                           "ts": datetime.now().isoformat(), "count": len(old_history)})
-            StorageService._save_index(uid, index)
-        logger.info("Migrated legacy history → session '%s'.", session_id)
-
-    # ── Backwards-compat shims (used elsewhere in the file) ──────────────────
-
-    @staticmethod
-    def load_history(uid: str) -> List[Dict]:
-        """Shim: load the active session identified by session_state."""
-        sid = st.session_state.get("active_session_id")
-        if sid:
-            return StorageService.load_session(uid, sid)
-        return []
-
-    @staticmethod
-    def save_history(history: List[Dict], uid: str) -> None:
-        """Shim: save into the active session."""
-        sid = st.session_state.get("active_session_id")
-        if sid:
-            StorageService.save_session(uid, sid, history)
-
-    @staticmethod
-    def log_qa(
-        query:   str,
-        answer:  str,
-        sources: List[str],
-        rating:  Optional[int] = None,
-        qa_id:   Optional[str] = None,
-    ) -> None:
-
-        row = {
-            "qa_id":        qa_id or "",
-            "timestamp":    datetime.now().isoformat(),
-            "question":     query,             # BUG FIX: no longer truncated
-            "answer":       answer[:2000],
-            "sources_used": ", ".join(sources),
-            "user_rating":  rating if rating is not None else "",
-        }
-        try:
-            with _qa_log_lock:
-                file_exists = os.path.exists(_QA_LOG_FILE)
-                with open(_QA_LOG_FILE, "a", newline="", encoding="utf-8") as fh:
-                    writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
-                    if not file_exists:
-                        writer.writeheader()
-                    writer.writerow(row)
-        except Exception as exc:
-            logger.error("Log QA failed: %s", exc)
 
 
 # =============================================================================
@@ -2476,9 +2255,6 @@ def _init_session() -> None:
             st.session_state[key] = val
             st.session_state.pop("_chat_started", None)
 
-
-_init_session()
-
 # ── Singleton services ────────────────────────────────────────────────────────
 
 
@@ -2503,7 +2279,7 @@ def _llm() -> LLMService:
 
 
 @st.cache_resource
-def _store():
+def _store() -> DBStorageService:
     return DBStorageService()
 
 
@@ -3156,7 +2932,11 @@ def _sidebar() -> Tuple[bool, List[str], Optional[List[str]]]:
         st.divider()
 
         # ── Past sessions list ────────────────────────────────────────────────
-        sessions   = store.list_sessions(uid)
+        sessions = st.session_state.get("_cached_sessions") or store.list_sessions(uid)
+        st.session_state["_cached_sessions"] = sessions
+        # Invalidate on new chat / delete:
+        st.session_state.pop("_cached_sessions", None)
+        
         active_sid = st.session_state.get("active_session_id")
 
         if sessions:
@@ -3540,13 +3320,23 @@ def _render_inline_feedback(msg: Dict, qa_id: str) -> None:
         key       = f"fb_dl_{qa_id}",
     )
 
+_rate: dict = {}
+
+def _check_rate(uid: str, max_per_min: int = 20) -> bool:
+    now  = time.time()
+    hits = [t for t in _rate.get(uid, []) if now - t < 60]
+    _rate[uid] = hits
+    if len(hits) >= max_per_min:
+        return False
+    _rate[uid].append(now)
+    return True
 
 # =============================================================================
 # ENTRY POINT
 # =============================================================================
 
-
 def main() -> None:
+    _init_session() 
     st.markdown(_CSS, unsafe_allow_html=True)
 
     # ── Auth gate — nothing renders until user is logged in ───────────────────
@@ -3666,7 +3456,7 @@ def main() -> None:
     # or initial load).
     sid = st.session_state.get("active_session_id")
     if sid and not st.session_state["chat_history"]:
-        loaded = StorageService.load_session(uid, sid)
+        loaded = DBStorageService.load_session(uid, sid)
         if loaded:
             st.session_state["chat_history"] = loaded
             if not st.session_state["conv_memory"]._turns:
@@ -3709,6 +3499,10 @@ def main() -> None:
         key="chat_input",
         max_chars=2000,
     ) or prefill_val
+
+    if not _check_rate(uid):
+        st.warning("⚠️ Too many requests. Please wait a moment.")
+        st.stop()
 
     # Recover input from the layout-switch rerun (chat_input returns None
     # on the rerun that follows st.rerun(), so we restore from session_state)
@@ -3820,6 +3614,7 @@ def main() -> None:
                 retrieved_sections  = _freq,
                 conversation_history= conv_turns,
                 lang                = lang,
+                uid                 = uid,
             )
 
             # Convert agent output → FormEntry objects for downstream rendering
