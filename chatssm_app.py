@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
 from filelock import FileLock
-from rank_bm25 import BM25Okapi # type: ignore
+from rank_bm25 import BM25Okapi
 
 import numpy as np
 import pandas as pd
@@ -57,7 +57,7 @@ import csv
 from memory_manager import MemoryManager
 from intent_form_agent import IntentFormAgent
 from learning_agent import LearningAgent
-from auth import render_auth_wall, logout
+from auth import render_auth_wall, logout, _supabase_admin
 from db_storage import DBStorageService
 
 # =============================================================================
@@ -278,6 +278,8 @@ _GREETING_RESPONSES = {
         "atau sebarang perkara berkaitan SSM."
     ),
 }
+
+_CLBG_RE = re.compile(r'\bCLBG\b|company limited by guarantee|Checklist for CLBG', re.IGNORECASE)
 
 def _expand_query(text: str) -> str:
     """Expand common abbreviations before embedding to improve retrieval."""
@@ -882,6 +884,12 @@ class DocumentIndex:
 
         w = 0.0 if lang == "ms" else AppConfig.BM25_WEIGHT
         scores = (1 - w) * vector_scores + w * bm25_raw
+
+        query_mentions_clbg = bool(_CLBG_RE.search(query_text))
+        if not query_mentions_clbg:
+            for idx_c, chunk in enumerate(self._chunks):
+                if _CLBG_RE.search(chunk.text):
+                    scores[idx_c] *= 0.4   # 60% penalty for CLBG chunks on non-CLBG queries
 
         k   = min(AppConfig.TOP_K_PER_SOURCE * 3, len(scores))
         top = np.argpartition(scores, -k)[-k:]
@@ -2228,9 +2236,6 @@ class CacheBuilder:
         except Exception:
             pass 
 
-
-
-
 # =============================================================================
 # STREAMLIT PAGE CONFIG
 # =============================================================================
@@ -2331,7 +2336,10 @@ def _make_qa_id(query: str, timestamp: str) -> str:
 
 def _get_persistent_user_id() -> str:
     """Returns the authenticated user's Supabase ID."""
-    return st.session_state.get("_auth_user_id", "")
+    uid = st.session_state.get("_auth_user_id", "")
+    if not uid:
+        raise RuntimeError("No authenticated user — auth wall bypassed.")
+    return uid
 
 # =============================================================================
 # CSS
@@ -3113,19 +3121,14 @@ def _inject_form_links(text: str, forms: List[FormEntry], lang: str = "en") -> s
         if not injected and not already_linked and not any_injected:
             appended.append(f"[{form.name}]({url})")
 
-    if appended:
-        if lang == "ms":
-            suffix = (
-                f"\n\nBorang berkaitan boleh diakses di sini: {appended[0]}"
-                if len(appended) == 1
-                else "\n\nBorang berkaitan boleh diakses di sini: " + ", ".join(appended)
-            )
-        else:
-            suffix = (
-                f"\n\nYou can access the relevant form here: {appended[0]}"
-                if len(appended) == 1
-                else "\n\nYou can access the relevant forms here: " + ", ".join(appended)
-            )
+    if appended and not any_injected:
+        # Only append the single most-relevant form, not every unmatched one
+        best = appended[0]
+        suffix = (
+            f"\n\nBorang berkaitan boleh diakses di sini: {best}"
+            if lang == "ms" else
+            f"\n\nYou can access the relevant form here: {best}"
+        )
         text = text.rstrip() + suffix
 
     return text
@@ -3219,12 +3222,27 @@ def _submit_feedback(
         response     = msg.get("response", ""),
         citations    = msg.get("citations", []),
         rating       = rating,
-        failure_type = "",          # intentionally empty — filled by auto-diagnosis
+        failure_type = "",
         comment      = "",
         form_ids     = form_ids,
         form_correct = (True  if vote == "up"   and form_ids else
                         False if vote == "down"              else None),
     )
+
+     # ── Also save to Supabase feedback table ─────────────────────────────
+    try:
+        uid = _get_persistent_user_id()
+        _supabase_admin().table("feedback").insert({
+            "user_id":      uid,
+           "qa_id":        qa_id,
+            "rating":       rating,
+            "failure_type": "",
+            "form_correct": (True  if vote == "up"   and form_ids else
+                            False if vote == "down"              else None),
+        }).execute()
+    except Exception as _fb_exc:
+        logger.warning("Supabase feedback save failed: %s", _fb_exc)
+
     store.log_qa(
         msg.get("query", ""), msg.get("response", ""),
         msg.get("citations", []), rating, qa_id,
@@ -3336,7 +3354,7 @@ def _check_rate(uid: str, max_per_min: int = 20) -> bool:
 # =============================================================================
 
 def main() -> None:
-    _init_session() 
+    _init_session()
     st.markdown(_CSS, unsafe_allow_html=True)
 
     # ── Auth gate — nothing renders until user is logged in ───────────────────
@@ -3550,7 +3568,10 @@ def main() -> None:
                 "You are ChatSSM, a legal assistant for Malaysian company law (SSM). "
                 "Respond warmly to greetings in 1-2 sentences. "
                 "Mention you can help with Companies Act, LLP Act, business registration, or SSM matters. "
-                "Match the user's language exactly. Never use bullet points."
+                "CRITICAL: Match the user's language EXACTLY. "
+                "If the user wrote in Malay, respond ENTIRELY in Malay. "
+                "If the user wrote in English, respond in English. Never mix languages. "
+                "Never use bullet points."
             )
             try:
                 greeting_response = "".join(
@@ -3723,15 +3744,21 @@ def main() -> None:
             )
 
             if lang == "ms":
-                lang_directive = "⚠️ WAJIB: Jawab SEPENUHNYA dalam Bahasa Malaysia. Jangan gunakan bahasa Inggeris langsung.\n"
+                lang_directive = (
+                    "⚠️ ARAHAN KRITIKAL — BAHASA MALAYSIA WAJIB ⚠️\n"
+                    "Pengguna menulis dalam Bahasa Malaysia. Anda MESTI menjawab dalam Bahasa Malaysia sepenuhnya.\n"
+                    "JANGAN gunakan bahasa Inggeris langsung. Walaupun sumber rujukan dalam bahasa Inggeris, "
+                    "terjemahkan jawapan anda ke dalam Bahasa Malaysia.\n"
+                    "Istilah undang-undang seperti 'Companies Act 2016', 'Section 14', 'Sdn Bhd' boleh dikekalkan.\n"
+                )
             elif lang == "mixed":
                 lang_directive = "NOTE: User mixed Malay and English. Respond in English, Malay legal terms are acceptable.\n"
             else:
                 lang_directive = ""
 
             prompt = (
-                f"/no_think\n{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
-                f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{lang_directive}{form_hint}"
+                f"/no_think\n{lang_directive}{history_block}{memory_block}<<CONTEXT_BLOCK>>\n{'─'*72}\n{context_block}\n{'─'*72}\n\n"
+                f"<<USER_QUESTION>>\n{user_input}\n\n{act_hint}{form_hint}"
                 f"Before writing, identify the single most relevant section in the CONTEXT above.\n"
                 f"ANSWER (explain conversationally, cite every fact with its source, stay within CONTEXT):\n"
             )
