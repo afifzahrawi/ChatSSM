@@ -7,6 +7,23 @@ Drop this file next to chatssm_app.py.
 
 import os
 import streamlit as st
+
+# Monkey-patch httpx to disable SSL verification (Windows SSL workaround)
+import httpx
+
+class PatchedClient(httpx.Client):
+    def __init__(self, *args, **kwargs):
+        kwargs['verify'] = False
+        super().__init__(*args, **kwargs)
+
+class PatchedAsyncClient(httpx.AsyncClient):
+    def __init__(self, *args, **kwargs):
+        kwargs['verify'] = False
+        super().__init__(*args, **kwargs)
+
+httpx.Client = PatchedClient
+httpx.AsyncClient = PatchedAsyncClient
+
 from supabase import create_client, Client
 
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -22,10 +39,10 @@ def _supabase() -> Client:
 
 @st.cache_resource
 def _supabase_admin() -> Client:
-    return create_client(
-        os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    )
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+    if not key:
+        raise EnvironmentError("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY must be set.")
+    return create_client(os.environ["SUPABASE_URL"], key)
 
 
 def render_auth_wall() -> str | None:
