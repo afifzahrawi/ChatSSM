@@ -585,14 +585,12 @@ class IntentFormAgent:
         matched_forms = []
         for form_entry in self._forms:
             form_sections = form_entry.get("_parsed_sections", [])
-            # Score: how many of the expected sections match this form
-            score = sum(
-                1 for es in all_sections
-                for fs in form_sections
-                if self._sections_match(es, fs)
-            )
-            if score > 0:
-                matched_forms.append((score, form_entry))
+            score = 0
+            for i, es in enumerate(expected_sections):   # i=0 is the primary section
+                for fs in form_sections:
+                    if self._sections_match(es, fs):
+                        # Primary section match (first in taxonomy) worth 3x
+                        score += 3 if i == 0 else 1
 
         if detected_act and matched_forms:
             act_filtered = [
@@ -601,6 +599,16 @@ class IntentFormAgent:
             ]
             if act_filtered:
                 matched_forms = act_filtered
+        
+        query_text = intent.reasoning.lower() + " " + intent.legal_procedure.lower()
+        is_clbg_query = any(
+            kw in query_text
+            for kw in ["clbg", "company limited by guarantee", "guarantee company"]
+        )
+        if not is_clbg_query:
+            non_clbg = [(s, f) for s, f in matched_forms if not f.get("_clbg_only")]
+            if non_clbg:   # only apply filter if it leaves at least one result
+                matched_forms = non_clbg
 
         matched_forms.sort(key=lambda x: x[0], reverse=True)
 
@@ -745,10 +753,21 @@ class IntentFormAgent:
             # Default: if no act found, assume Companies Act (most common)
             if not act_filter:
                 act_filter = ["Companies Act 2016"]
+
+            clbg_signals = ["clbg", "company limited by guarantee", "checklist for clbg"]
+            is_clbg_only = any(
+                signal in rs.lower()
+                for rs in form.get("related_sections", [])
+                for signal in clbg_signals
+            ) or any(
+                signal in form.get("name", "").lower()
+                for signal in clbg_signals
+            )
             
             form_copy = dict(form)
             form_copy["_parsed_sections"] = parsed_sections
             form_copy["_act_filter"] = act_filter
+            form_copy["_clbg_only"] = is_clbg_only
             indexed.append(form_copy)
         return indexed
 
