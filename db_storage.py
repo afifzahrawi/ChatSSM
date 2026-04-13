@@ -5,9 +5,26 @@ Same method signatures — swap it in without changing chatssm_app.py's call sit
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from auth import _supabase
+
+# Monkey-patch httpx to disable SSL verification (Windows SSL workaround)
+import httpx
+
+class PatchedClient(httpx.Client):
+    def __init__(self, *args, **kwargs):
+        kwargs['verify'] = False
+        super().__init__(*args, **kwargs)
+
+class PatchedAsyncClient(httpx.AsyncClient):
+    def __init__(self, *args, **kwargs):
+        kwargs['verify'] = False
+        super().__init__(*args, **kwargs)
+
+httpx.Client = PatchedClient
+httpx.AsyncClient = PatchedAsyncClient
+
+from auth import _supabase_admin as _supabase
 
 logger = logging.getLogger("chatssm.db")
 
@@ -147,7 +164,7 @@ class DBStorageService:
                 (
                     _supabase()
                     .table("chat_sessions")
-                    .update({"title": title, "updated_at": datetime.now().isoformat()})
+                    .update({"title": title, "updated_at": datetime.now(timezone.utc).isoformat()})
                     .eq("id", session_id)
                     .execute()
                 )
